@@ -1,3 +1,4 @@
+import { CloudwatchLogGroup } from '@cdktf/provider-aws/lib/cloudwatch-log-group';
 import { DataAwsCallerIdentity } from '@cdktf/provider-aws/lib/data-aws-caller-identity';
 import { EcrRepository } from '@cdktf/provider-aws/lib/ecr-repository';
 import { EcsCluster } from '@cdktf/provider-aws/lib/ecs-cluster';
@@ -110,6 +111,14 @@ export class Aws extends TerraformStack {
             ]
         })
 
+        const runnerLogGroup = new CloudwatchLogGroup(this, 'RunnerLogGroup', {
+            name: '/ecs/GHA',
+        });
+
+        const kanikoLogGroup = new CloudwatchLogGroup(this, 'KanikoLogGroup', {
+            name: '/ecs/Kaniko',
+        });
+
         new EcsTaskDefinition(this, 'RunnerTaskDefinition', {
             family: 'GHA',
             taskRoleArn: runnerRole.arn,
@@ -136,7 +145,7 @@ export class Aws extends TerraformStack {
                     logConfiguration: {
                         logDriver: 'awslogs',
                         options: {
-                            "awslogs-group": "/ecs/GHA",
+                            "awslogs-group": runnerLogGroup.name,
                             "awslogs-region": 'us-east-1',
                             "awslogs-create-group": "true",
                             "awslogs-stream-prefix": "ecs",
@@ -173,7 +182,7 @@ export class Aws extends TerraformStack {
                     logConfiguration: {
                         logDriver: 'awslogs',
                         options: {
-                            "awslogs-group": "/ecs/Kaniko",
+                            "awslogs-group": kanikoLogGroup.name,
                             "awslogs-region": 'us-east-1',
                             "awslogs-create-group": "true",
                             "awslogs-stream-prefix": "ecs",
