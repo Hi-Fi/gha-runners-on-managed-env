@@ -1,0 +1,16 @@
+name: Image build test
+
+on:
+  workflow_dispatch:
+
+jobs: 
+  build:
+    runs-on: self-hosted
+    steps:
+      - run: echo "building"
+      - run: |
+        apt update
+        apt install awscli -y
+      - run: |
+        echo "Executing Kaniko build"
+        aws ecs run-task --task-definition Kaniko
