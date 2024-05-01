@@ -13,11 +13,29 @@ Open issue still was left, how this kind of build could be included in GitHub Ac
 
 ## Creting runner environment to AWS
 
+### Infra
+
+Infra creation is included in the repo using Terraform CDK (CDKTF).
+
+Example infra is created to AWS ECS which is not easiest opttion for Runners as it doesn't support as easy scaling as Azure Container App (ACA) Jobs does (latter with [KEDA](https://keda.sh)). But for the demo here it's enough with possibility to go and start Runner tasks manually. 
+
+If wanting to use ECS to host actual Runners, some autoscaling solution/service should be used or created.
+
+Note that with ECS it's possible to `sudo` inside the runner, which is not possible with ACA Jobs. 
+
 ### Kaniko
 
-Current example uses hardcoded Docker config to push images to Elastic Container Registry (ECR). If wanting more dynamic approach for that, additional Golang app would be to do the starting ("start script") or use Kaniko's debug image.
+Current example uses hardcoded Docker config to push images to Elastic Container Registry (ECR). If wanting more dynamic approach for that, additional Golang app would be to do the starting ("start script") or use Kaniko's debug image. At the start it's possible to override environment variables or commands, which might be enough.
 
 As ECR access works out of the box, there's no need in this example to create custom Kaniko image.
+
+Image should be pushed to ECR created within Infra creation by:
+
+```
+docker image pull gcr.io/kaniko-project/executor:v1.22.0
+docker image tag gcr.io/kaniko-project/executor:v1.22.0 <AWS account>.dkr.ecr.<AWS region>.amazonaws.com/kaniko:latest
+docker image push <AWS account>.dkr.ecr.<AWS region>.amazonaws.com/kaniko:latest
+```
 
 ### Runner
 
@@ -35,10 +53,9 @@ Following environment variables need to be set
 | GH_URL | URL for Runner process to connect to | https://github.com/$REPO_OWNER/$REPO_NAME |
 | REGISTRATION_TOKEN_API_URL | URL to obtain registration token for Runner | https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/actions/runners/registration-token |
 
-### Infra
+Image should be pushed to ECR created within Infra creation by:
 
-Infra creation is included in the repo using Terraform CDK (CDKTF).
-
-Example infra is created to AWS ECS which is not easiest opttion for Runners as it doesn't support as easy scaling as Azure Container App Jobs does (latter with [KEDA](https://keda.sh)). But for the demo here it's enough with possibility to go and start Runner tasks manually. 
-
-If wanting to use ECS to host actual Runners, some autoscaling solution/service should be used or created.
+```
+docker image build --file images/Dockerfile.gha -t <AWS account>.dkr.ecr.<AWS region>.amazonaws.com/gha:latest .
+docker image push <AWS account>.dkr.ecr.<AWS region>.amazonaws.com/gha:latest
+```
