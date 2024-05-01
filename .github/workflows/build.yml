@@ -9,8 +9,8 @@ jobs:
     steps:
       - run: echo "building"
       - run: |
-        apt update
-        apt install awscli -y
+          apt update
+          apt install awscli -y
       - run: |
-        echo "Executing Kaniko build"
-        aws ecs run-task --task-definition Kaniko
+          echo "Executing Kaniko build"
+          aws ecs run-task --task-definition Kaniko
