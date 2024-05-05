@@ -9,8 +9,14 @@ jobs:
     steps:
       - run: echo "building"
       - run: |
-          apt update
-          apt install awscli -y
+          sudo apt update
+          sudo apt install awscli -y
       - run: |
           echo "Executing Kaniko build"
-          aws ecs run-task --task-definition Kaniko
+          OUTPUT=$(aws ecs run-task --task-definition Kaniko --cluster gha-runner-cluster --network-configuration "awsvpcConfiguration={subnets=[$(aws ec2 describe-subnets --output text --query 'Subnets[*].SubnetId' | sed 's/\t/,/g')],securityGroups=[$(aws ec2 describe-security-groups --output text --query 'SecurityGroups[*].GroupId' | sed 's/\t/,/g')],assignPublicIp=ENABLED}" --launch-type FARGATE)
+          echo $OUTPUT
+          TASK_ARN=$(jq -r '.tasks[0].taskArn' <<< $OUTPUT)
+          TASK_ID=${TASK_ARN##*/}
+          echo "Waiting for task to complete"
+          aws ecs wait tasks-stopped --cluster gha-runner-cluster --tasks $TASK_ARN
+          aws logs get-log-events --log-group-name "/ecs/Kaniko" --log-stream-name "ecs/kaniko/$TASK_ID" --output text --query 'events[*].[timestamp,message]'
