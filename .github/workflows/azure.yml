@@ -1,0 +1,26 @@
+name: Image build test on ACA
+
+on:
+  workflow_dispatch:
+
+jobs: 
+  build:
+    runs-on: self-hosted
+    steps:
+      - run: echo "building"
+      - run: |
+          # Note that ACA running runner can't sudo. In this case runner have to run on root
+          curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+      # https://github.com/actions/runner/issues/241#issuecomment-2019042651
+      - run: |
+          echo "Executing Kaniko build"
+          # Note that login within ACA requires always explicit client ID https://github.com/microsoft/azure-container-apps/issues/325#issuecomment-1202967046
+          az login --identity --username $AZURE_CLIENT_ID > login_info.log
+          JOB_EXECUTION_NAME=$(az containerapp job start -n $JOB_NAME -g $RG_NAME --query 'name' --output tsv)
+          echo "Started Kaniko Job $JOB_EXECUTION_NAME"
+          while az containerapp job execution show --job-execution-name $JOB_EXECUTION_NAME --name $JOB_NAME --resource-group $RG_NAME --query 'properties.status' --output tsv | grep -q "Running"; do echo "Execution $JOB_EXECUTION_NAME still running"; sleep 10; done
+          BUILD_STATUS=$(az containerapp job execution show --job-execution-name $JOB_EXECUTION_NAME --name $JOB_NAME --resource-group $RG_NAME --query 'properties.status' --output tsv)
+          echo "Kaniko build ended with status $BUILD_STATUS"
+          az extension add --upgrade -n log-analytics
+          az monitor log-analytics query -w "$LOG_ID" --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s startswith '$JOB_EXECUTION_NAME' | sort by _timestamp_d asc | project Log_s" -t 1H --query '[].Log_s' --output tsv
+          [ "$BUILD_STATUS" == "Succeeded" ]

@@ -1,4 +1,4 @@
-name: Image build test
+name: Image build test on ECS
 
 on:
   workflow_dispatch:

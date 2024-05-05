@@ -1,4 +1,4 @@
-FROM ghcr.io/actions/actions-runner:2.316.0
+FROM ghcr.io/actions/actions-runner:2.316.0 as base
 # for latest release, see https://github.com/actions/runner/releases
 
 USER root
@@ -11,6 +11,12 @@ RUN apt-get update && apt-get install -y curl jq && \
 COPY scripts/gha_entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
-USER runner
-
 ENTRYPOINT ["./entrypoint.sh"]
+
+FROM base as aca
+# Required in ACA as sudoing is not possible
+ENV RUNNER_ALLOW_RUNASROOT=true
+
+FROM base as ecs
+
+USER runner
