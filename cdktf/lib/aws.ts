@@ -162,7 +162,8 @@ export class Aws extends TerraformStack {
                     command: [
                         '--dockerfile=images/Dockerfile.gha',
                         '--context=git://github.com/Hi-Fi/gha-runners-on-managed-env.git',
-                        `--destination=${resultsEcr.repositoryUrl}:latest`
+                        `--destination=${resultsEcr.repositoryUrl}:latest`,
+                        '--target=ecs'
                     ],
                     logConfiguration: {
                         logDriver: 'awslogs',
