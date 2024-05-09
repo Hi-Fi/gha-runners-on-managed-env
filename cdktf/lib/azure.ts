@@ -151,7 +151,7 @@ export class Azure extends TerraformStack {
                                     '--dockerfile=images/Dockerfile.gha',
                                     '--context=git://github.com/Hi-Fi/gha-runners-on-managed-env.git',
                                     `--destination=${acr.loginServer}/results:latest`,
-                                    '--target=aca'
+                                    '--target=root'
                                 ],
                                 image: `${acr.loginServer}/kaniko:latest`,
                                 name: 'main',

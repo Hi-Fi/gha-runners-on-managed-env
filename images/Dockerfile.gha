@@ -3,8 +3,12 @@ FROM ghcr.io/actions/actions-runner:2.316.0 as base
 
 USER root
 
-# install curl and jq
-RUN apt-get update && apt-get install -y curl jq && \
+# install curl and jq. resolv.conf fix required by Cloud Run, but works also with others
+# Without fix, packages can't be resolved nor resulting image pushed
+# Push error: Get "https://europe-north1-docker.pkg.dev/v2/": dial tcp: lookup europe-north1-docker.pkg.dev on [::1]:53: read udp [::1]:46278->[::1]:53: read: connection refused
+# Normal docker build fails when trying to set nameserver, so it should always pass
+RUN (echo "nameserver 208.67.222.222" | tee /etc/resolv.conf > /dev/null) || echo "Not setting nameserver to resolv.conf" && \
+    apt-get update && apt-get install -y curl jq && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -17,6 +21,8 @@ FROM base as aca
 # Required in ACA as sudoing is not possible
 ENV RUNNER_ALLOW_RUNASROOT=true
 
-FROM base as ecs
+FROM base as nonroot
 
+# Without this DNS resolution fails on pushing
+RUN cat /etc/resolv.conf
 USER runner
