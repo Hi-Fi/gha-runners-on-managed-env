@@ -1,0 +1,20 @@
+name: Image build test on Cloud Run
+
+on:
+  workflow_dispatch:
+
+jobs: 
+  build:
+    runs-on: self-hosted
+    steps:
+      - run: echo "building"
+      - run: |
+          sudo apt update
+          sudo apt-get install -y apt-transport-https ca-certificates gnupg curl
+          curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+          sudo apt-get update && sudo apt-get install -y google-cloud-cli
+      - run: |
+          echo "Executing Kaniko build"
+          gcloud run jobs execute $KANIKO_JOB --wait
+          # TODO: log reading, something like gcloud logging read 'resource.type="cloud_run_job" AND resource.labels.job_name="kaniko-job" AND resource.labels.location="europe-north1" AND labels."run.googleapis.com/execution_name"="kaniko-job-vtqn9"' --order asc --format text --format="value(textPayload)"
