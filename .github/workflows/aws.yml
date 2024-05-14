@@ -5,7 +5,7 @@ on:
 
 jobs: 
   build:
-    runs-on: self-hosted
+    runs-on: local-runner-scale-set
     steps:
       - run: echo "building"
       - run: |
