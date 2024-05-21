@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,7 +17,10 @@ import (
 )
 
 func main() {
-	go startHealthCheck()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+	go startHealthCheck(logger)
 	pat, err := requireEnv("PAT")
 	if err != nil {
 		log.Fatal(err.Error())
@@ -25,32 +29,32 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	client := github.CreateActionsServiceClient(pat)
-	fmt.Println(client.ActionsServiceAdminToken)
-	defer client.CloseIdleConnections()
-	scaleSet, _ := client.GetRunnerScaleSet(ctx, 1, "local-runner-scale-set")
-	fmt.Println(client.ActionsServiceAdminToken)
-	fmt.Println(scaleSet)
+	scaleSetName := getenv("SCALE_SET_NAME", "local-runner-scale-set")
+	client := github.CreateActionsServiceClient(ctx, pat, logger)
+	defer client.Client.CloseIdleConnections()
+	scaleSet, _ := client.Client.GetRunnerScaleSet(ctx, 1, scaleSetName)
 	if scaleSet != nil {
-		fmt.Printf("Using existing scale set %s (ID %x). Runner group id %x\n", scaleSet.Name, scaleSet.Id, scaleSet.RunnerGroupId)
+		logger.Info(fmt.Sprintf("Using existing scale set %s (ID %x). Runner group id %x", scaleSet.Name, scaleSet.Id, scaleSet.RunnerGroupId))
 	} else {
-		fmt.Println("Creating new scale set")
-		scaleSet = github.CreateRunnerScaleSet(ctx, client, "local-runner-scale-set")
-		fmt.Printf("Created scale set %s (ID %x). Runner group id %x\n", scaleSet.Name, scaleSet.Id, scaleSet.RunnerGroupId)
+		logger.Debug("Creating new scale set")
+		scaleSet = client.CreateRunnerScaleSet(scaleSetName)
+		logger.Info(fmt.Sprintf("Created scale set %s (ID %x). Runner group id %x", scaleSet.Name, scaleSet.Id, scaleSet.RunnerGroupId))
 	}
 
-	ecsClient, err := aws.GetClient(ctx)
+	ecsClient, err := aws.GetClient(ctx, logger)
 
 	if err == nil {
-		github.StartMessagePolling(ctx, client, scaleSet.Id, ecsClient)
+		client.StartMessagePolling(scaleSet.Id, ecsClient)
+	} else {
+		logger.Error("Client creation failed.", slog.Any("err", err))
 	}
 }
 
-func startHealthCheck() {
+func startHealthCheck(logger *slog.Logger) {
 	http.HandleFunc("/", health)
 
 	port := getenv("PORT", "5000")
-	fmt.Printf("Healtcheck serving at port %s", port)
+	logger.Info(fmt.Sprintf("Healtcheck serving at port %s", port))
 	err := http.ListenAndServe(fmt.Sprintf(":%s", port), nil)
 	if errors.Is(err, http.ErrServerClosed) {
 		fmt.Printf("server closed\n")
@@ -64,57 +68,10 @@ func health(w http.ResponseWriter, _ *http.Request) {
 	io.WriteString(w, "OK")
 }
 
-// func createRunnerScaleSet(pat string) {
-// 	creds := actions.ActionsAuth{
-// 		Token: pat,
-// 	}
-
-// 	actionsServiceClient, err := actions.NewClient("https://github.com/Hi-Fi/gha-runners-on-managed-env", &creds)
-// 	if err != nil {
-// 		log.Fatal(err.Error())
-// 	}
-// 	runnerScaleSet := actions.RunnerScaleSet{
-// 		Name:          "local-runner-scale-set",
-// 		RunnerGroupId: 1,
-// 		Labels: []actions.Label{
-// 			{
-// 				Name: "aca",
-// 				Type: "System",
-// 			},
-// 		},
-// 		RunnerSetting: actions.RunnerSetting{
-// 			Ephemeral:     true,
-// 			DisableUpdate: true,
-// 		},
-// 	}
-// 	_, err = actionsServiceClient.CreateRunnerScaleSet(context.TODO(), &runnerScaleSet)
-// 	if err != nil {
-// 		log.Fatal(err.Error())
-// 	}
-
-// 	// defer func() {
-// 	// 	fmt.Printf("Removing scale set %s", returnScaleSet.Name)
-// 	// 	actionsServiceClient.DeleteRunnerScaleSet(context.TODO(), returnScaleSet.Id)
-// 	// }()
-
-// 	fmt.Println("Starting messaging session")
-// 	actionsServiceClient.CreateMessageSession(context.TODO(), runnerScaleSet.Id, "Hi-Fi")
-// }
-
-//	func pollActionNeed(client *github.Client) {
-//		workflowRuns, err := client.ListRepositoryWorkflowRuns(context.TODO(), "Hi-Fi", "gha-runners-on-managed-env")
-//		if err != nil {
-//			log.Fatal(err.Error())
-//		}
-//		fmt.Println(workflowRuns)
-//		for _, run := range workflowRuns {
-//			fmt.Printf("Run %x: %s in status %s", *run.ID, *run.Name, *run.Status)
-//		}
-//	}
 func requireEnv(key string) (value string, err error) {
 	value = os.Getenv(key)
 	if len(value) == 0 {
-		err = errors.New(fmt.Sprintf("Value required for environment variable %s", key))
+		err = fmt.Errorf(fmt.Sprintf("Value required for environment variable %s", key))
 	}
 	return
 }

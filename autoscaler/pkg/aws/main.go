@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 type Ecs struct {
 	ctx               context.Context
+	logger            *slog.Logger
 	client            *ecs.Client
 	taskDefinitionArn *string
 	starter           *string
@@ -24,7 +26,7 @@ type Ecs struct {
 	securityGroups    []string
 }
 
-func GetClient(ctx context.Context) (*Ecs, error) {
+func GetClient(ctx context.Context, logger *slog.Logger) (*Ecs, error) {
 	taskDefinitionArn, err1 := requireEnv("TASK_DEFINITION_ARN")
 	cluster, err2 := requireEnv("ECS_CLUSTER")
 	subnets, err3 := requireEnv("ECS_SUBNETS")
@@ -41,6 +43,7 @@ func GetClient(ctx context.Context) (*Ecs, error) {
 
 	return &Ecs{
 		ctx:               ctx,
+		logger:            logger,
 		client:            client,
 		taskDefinitionArn: &taskDefinitionArn,
 		cluster:           &cluster,
@@ -74,7 +77,7 @@ func (e *Ecs) CurrentRunnerCount() (int, error) {
 	return taskCount, err
 }
 
-func (e *Ecs) TriggerNewRunners(count int) (err error) {
+func (e *Ecs) TriggerNewRunners(count int, jitConfig string) (err error) {
 	var errs []error
 	for i := 0; i < int(math.Ceil(float64(count)/10)); i++ {
 		starts := count - 10*i
@@ -82,6 +85,8 @@ func (e *Ecs) TriggerNewRunners(count int) (err error) {
 		if starts > 10 {
 			starts = 10
 		}
+
+		e.logger.Debug(fmt.Sprintf("Triggering %d runners in batch", starts))
 
 		input := &ecs.RunTaskInput{
 			StartedBy:      e.starter,
@@ -96,6 +101,19 @@ func (e *Ecs) TriggerNewRunners(count int) (err error) {
 					AssignPublicIp: types.AssignPublicIpEnabled,
 				},
 			},
+			Overrides: &types.TaskOverride{
+				ContainerOverrides: []types.ContainerOverride{
+					{
+						Name: aws.String("runner"),
+						Environment: []types.KeyValuePair{
+							{
+								Name:  aws.String("ACTIONS_RUNNER_INPUT_JITCONFIG"),
+								Value: &jitConfig,
+							},
+						},
+					},
+				},
+			},
 		}
 
 		_, err := e.client.RunTask(e.ctx, input)
@@ -107,14 +125,15 @@ func (e *Ecs) TriggerNewRunners(count int) (err error) {
 	return errors.Join(errs...)
 }
 
-func (e *Ecs) NeededRunners(count int) (err error) {
+func (e *Ecs) NeededRunners(count int, jitConfig string) (err error) {
 	currentRunners, err := e.CurrentRunnerCount()
 	if err != nil {
 		return err
 	}
-
+	e.logger.Debug(fmt.Sprintf("%d/%d of runners available", currentRunners, count))
 	if count-currentRunners > 0 {
-		return e.TriggerNewRunners(count - currentRunners)
+		e.logger.Debug(fmt.Sprintf("Triggering %d runners", count-currentRunners))
+		return e.TriggerNewRunners(count-currentRunners, jitConfig)
 	}
 
 	return nil
@@ -123,7 +142,7 @@ func (e *Ecs) NeededRunners(count int) (err error) {
 func requireEnv(key string) (value string, err error) {
 	value = os.Getenv(key)
 	if len(value) == 0 {
-		err = errors.New(fmt.Sprintf("Value required for environment variable %s", key))
+		err = fmt.Errorf("value required for environment variable %s", key)
 	}
 	return
 }

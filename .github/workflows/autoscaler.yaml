@@ -1,8 +1,9 @@
 name: Publish autoscaler image
 
+# TODO: Release job
 on:
   push:
-    branches: [main, autoscaler]
+    branches: [main]
   pull_request:
     branches: [main]
 

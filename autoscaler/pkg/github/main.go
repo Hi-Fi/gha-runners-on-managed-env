@@ -5,13 +5,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/actions/actions-runner-controller/github/actions"
 	"github.com/google/uuid"
 )
 
-func CreateActionsServiceClient(pat string) *actions.Client {
+type ActionsServiceClient struct {
+	ctx    context.Context
+	Client *actions.Client
+	logger *slog.Logger
+}
+
+func CreateActionsServiceClient(ctx context.Context, pat string, logger *slog.Logger) *ActionsServiceClient {
 	creds := actions.ActionsAuth{
 		Token: pat,
 	}
@@ -21,10 +29,14 @@ func CreateActionsServiceClient(pat string) *actions.Client {
 		log.Fatal(err.Error())
 	}
 
-	return actionsServiceClient
+	return &ActionsServiceClient{
+		ctx:    ctx,
+		Client: actionsServiceClient,
+		logger: logger,
+	}
 }
 
-func CreateRunnerScaleSet(ctx context.Context, actionsServiceClient *actions.Client, scaleSetName string) *actions.RunnerScaleSet {
+func (asc *ActionsServiceClient) CreateRunnerScaleSet(scaleSetName string) *actions.RunnerScaleSet {
 	runnerScaleSet := actions.RunnerScaleSet{
 		Name:          scaleSetName,
 		RunnerGroupId: 1,
@@ -39,49 +51,47 @@ func CreateRunnerScaleSet(ctx context.Context, actionsServiceClient *actions.Cli
 			},
 		},
 	}
-	createScaleSet, err := actionsServiceClient.CreateRunnerScaleSet(ctx, &runnerScaleSet)
+	createScaleSet, err := asc.Client.CreateRunnerScaleSet(asc.ctx, &runnerScaleSet)
 	if err != nil {
 		log.Fatal(err.Error())
 	}
 	return createScaleSet
 }
 
-func DeleteRunnerScaleSet(ctx context.Context, actionsServiceClient *actions.Client, runnerScaleSetId int) {
-	actionsServiceClient.DeleteRunnerScaleSet(ctx, runnerScaleSetId)
+func (asc *ActionsServiceClient) DeleteRunnerScaleSet(runnerScaleSetId int) {
+	asc.logger.Info(fmt.Sprintf("Removing runner scaleset %d\n", runnerScaleSetId))
+	asc.Client.DeleteRunnerScaleSet(asc.ctx, runnerScaleSetId)
 }
 
-func deleteMessageSession(ctx context.Context, actionsServiceClient *actions.Client, runnerScaleSetId int, sessionId *uuid.UUID) {
-	actionsServiceClient.DeleteMessageSession(ctx, runnerScaleSetId, sessionId)
-}
-
-func StartMessagePolling(ctx context.Context, actionsServiceClient *actions.Client, runnerScaleSetId int, handler TriggerHandler) error {
+func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handler TriggerHandler) error {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = uuid.NewString()
 		fmt.Printf("Hostname set to uuid %s\n", hostname)
 	}
-	session, err := actionsServiceClient.CreateMessageSession(ctx, runnerScaleSetId, hostname)
+	session, err := asc.Client.CreateMessageSession(asc.ctx, runnerScaleSetId, hostname)
 	if err != nil {
-		log.Fatalf("Could not get session, error %v", err)
+		asc.logger.Error("Could not get session", slog.Any("err", err))
+		return err
 	}
 
-	defer deleteMessageSession(ctx, actionsServiceClient, runnerScaleSetId, session.SessionId)
+	defer asc.Client.DeleteMessageSession(context.Background(), runnerScaleSetId, session.SessionId)
 
 	var lastMessageId int64 = 0
 	for {
-		fmt.Println("waiting for message...")
+		asc.logger.Debug("waiting for message...")
 		select {
-		case <-ctx.Done():
-			fmt.Println("service is stopped.")
+		case <-asc.ctx.Done():
+			asc.logger.Info("service is stopped.")
 			return nil
 		default:
 			// Latest released version doesn't allow fetching more than one message at the time diretly. Building code for that as PoC.
-			message, _ := actionsServiceClient.GetMessage(ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, lastMessageId)
+			message, _ := asc.Client.GetMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, lastMessageId)
 			if message == nil {
 				continue
 			}
 			if message.MessageType != "RunnerScaleSetJobMessages" {
-				fmt.Printf("Skipping message of type %s\n", message.MessageType)
+				asc.logger.Debug(fmt.Sprintf("Skipping message of type %s\n", message.MessageType))
 				lastMessageId = message.MessageId
 				continue
 			}
@@ -91,7 +101,8 @@ func StartMessagePolling(ctx context.Context, actionsServiceClient *actions.Clie
 			if len(message.Body) > 0 {
 				if err := json.Unmarshal([]byte(message.Body), &rawMessages); err != nil {
 					lastMessageId = message.MessageId
-					fmt.Printf("Unmarshalling of message body to RawMessage failed: %w", err)
+					asc.logger.Warn("Unmarshalling of message body to RawMessage failed", slog.Any("err", err))
+					continue
 				}
 			}
 
@@ -99,7 +110,7 @@ func StartMessagePolling(ctx context.Context, actionsServiceClient *actions.Clie
 			for _, rawMessage := range rawMessages {
 				var messageType actions.JobMessageType
 				if err := json.Unmarshal(rawMessage, &messageType); err != nil {
-					fmt.Printf("Failed to parse job message type: %w", err)
+					asc.logger.Warn("Failed to parse job message type", slog.Any("err", err))
 					lastMessageId = message.MessageId
 					continue
 				}
@@ -108,24 +119,42 @@ func StartMessagePolling(ctx context.Context, actionsServiceClient *actions.Clie
 				if messageType.MessageType == "JobAvailable" {
 					var jobAvailable actions.JobAvailable
 					if err := json.Unmarshal(rawMessage, &jobAvailable); err != nil {
-						fmt.Printf("Failed to unmarshal message to job available: %w", err)
+						asc.logger.Warn("Failed to unmarshal message to job available", slog.Any("err", err))
 						lastMessageId = message.MessageId
 						continue
 					}
 					requestIds = append(requestIds, jobAvailable.RunnerRequestId)
 				} else {
-					fmt.Printf("Not parsing message %s", messageType.MessageType)
+					asc.logger.Debug(fmt.Sprintf("Not parsing message %s\n", messageType.MessageType))
+					lastMessageId = message.MessageId
+					continue
 				}
 			}
 
-			err := handler.NeededRunners(message.Statistics.TotalAcquiredJobs + message.Statistics.TotalRunningJobs + message.Statistics.TotalAssignedJobs + message.Statistics.TotalAvailableJobs)
+			if len(requestIds) == 0 {
+				continue
+			}
+
+			fmt.Println("Getting JIT config")
+			jitConfig, err := asc.Client.GenerateJitRunnerConfig(asc.ctx, &actions.RunnerScaleSetJitRunnerSetting{}, runnerScaleSetId)
+			if err != nil {
+				asc.logger.Warn("Could not get JIT config", slog.Any("err", err))
+				continue
+			}
+
+			err = handler.TriggerNewRunners(1, jitConfig.EncodedJITConfig)
 
 			if err == nil {
+				asc.logger.Info("Runners requested succesfully, acquiring jobs message")
 				lastMessageId = message.MessageId
-				actionsServiceClient.AcquireJobs(ctx, runnerScaleSetId, session.MessageQueueAccessToken, requestIds)
-				actionsServiceClient.DeleteMessage(ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, message.MessageId)
+				jobs, err := asc.Client.AcquireJobs(asc.ctx, runnerScaleSetId, session.MessageQueueAccessToken, requestIds)
+				if err == nil {
+					asc.logger.Info(fmt.Sprintf("Acquired jobs %s, removing message...\n", strings.Join(strings.Fields(fmt.Sprint(jobs)), ", ")))
+					asc.Client.DeleteMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, message.MessageId)
+				}
+
 			} else {
-				fmt.Println(err)
+				slog.Error("Triggering new runners faileded", slog.Any("err", err))
 			}
 		}
 	}
