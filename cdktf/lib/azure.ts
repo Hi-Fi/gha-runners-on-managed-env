@@ -108,6 +108,7 @@ export class Azure extends TerraformStack {
             }
         });
 
+        // TODO: Images through caching: https://techcommunity.microsoft.com/t5/apps-on-azure-blog/announcing-public-preview-of-caching-for-acr/ba-p/3744655
         const kanikoJob = new Resource(this, 'kanikoJob', {
             type: 'Microsoft.App/jobs@2023-05-01',
             name: 'kaniko-job-01',

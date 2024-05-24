@@ -64,6 +64,7 @@ export class Gcp extends TerraformStack {
             role: 'roles/artifactregistry.writer',
         })        
 
+        // TODO: check caching https://cloud.google.com/artifact-registry/docs/pull-cached-dockerhub-images
         const kanikoJob = new CloudRunV2Job(this, 'kanikoJob', {
             name: 'kaniko-job',
             location: client.region,

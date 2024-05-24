@@ -1,8 +1,11 @@
 import { CloudwatchLogGroup } from '@cdktf/provider-aws/lib/cloudwatch-log-group';
 import { DataAwsCallerIdentity } from '@cdktf/provider-aws/lib/data-aws-caller-identity';
 import { DataAwsRegion } from '@cdktf/provider-aws/lib/data-aws-region';
+import { DataAwsSecurityGroups } from '@cdktf/provider-aws/lib/data-aws-security-groups';
+import { DataAwsSubnets } from '@cdktf/provider-aws/lib/data-aws-subnets';
 import { EcrRepository } from '@cdktf/provider-aws/lib/ecr-repository';
 import { EcsCluster } from '@cdktf/provider-aws/lib/ecs-cluster';
+import { EcsService } from '@cdktf/provider-aws/lib/ecs-service';
 import { EcsTaskDefinition } from '@cdktf/provider-aws/lib/ecs-task-definition';
 import { IamPolicy } from '@cdktf/provider-aws/lib/iam-policy';
 import { IamRole } from '@cdktf/provider-aws/lib/iam-role';
@@ -49,13 +52,20 @@ export class Aws extends TerraformStack {
             })
         })
 
-        const runnerEcr = new EcrRepository(this, 'RunnerRepository', {
-            name: 'gha'
-        });
-
-        const kanikoEcr = new EcrRepository(this, 'KanikoRepository', {
-            name: 'kaniko'
-        });
+        const autoscalerRole = new IamRole(this, 'AutoscalerRole', {
+            assumeRolePolicy: Fn.jsonencode({
+                'Version': '2012-10-17',
+                'Statement': [
+                    {
+                        'Effect': 'Allow',
+                        'Principal': {
+                            'Service': 'ecs-tasks.amazonaws.com'
+                        },
+                        'Action': 'sts:AssumeRole'
+                    }
+                ]
+            })
+        })
 
         const resultsEcr = new EcrRepository(this, 'ResultsRepository', {
             name: 'results'
@@ -105,28 +115,26 @@ export class Aws extends TerraformStack {
             name: '/ecs/Kaniko',
         });
 
-        new EcsTaskDefinition(this, 'RunnerTaskDefinition', {
+        const autoscalerLogGroup = new CloudwatchLogGroup(this, 'AutoscalerLogGroup', {
+            name: '/ecs/Autoscaler',
+        });
+
+        // TODO: Images through caching: https://docs.aws.amazon.com/AmazonECR/latest/userguide/pull-through-cache.html
+        const runnerTaskDefinition = new EcsTaskDefinition(this, 'RunnerTaskDefinition', {
             family: 'GHA',
             taskRoleArn: runnerRole.arn,
             executionRoleArn: ecsTaskExecutionRole.arn,
             containerDefinitions: Fn.jsonencode([
                 {
                     name: 'runner',
-                    image: `${runnerEcr.repositoryUrl}:latest`,
+                    image: 'ghcr.io/actions/actions-runner:2.316.1',
+                    command: ['/home/runner/run.sh'],
                     essential: true,
                     environment: [
                         {
-                            name: 'GH_URL',
-                            value: 'https://github.com/Hi-Fi/gha-runners-on-managed-env'
+                            name: 'ECS_CLUSTER_NAME',
+                            value: cluster.name
                         },
-                        {
-                            name: 'REGISTRATION_TOKEN_API_URL',
-                            value: 'https://api.github.com/repos/Hi-Fi/gha-runners-on-managed-env/actions/runners/registration-token'
-                        },
-                        {
-                            name: 'GITHUB_PAT',
-                            value: pat.value
-                        }
                     ],
                     logConfiguration: {
                         logDriver: 'awslogs',
@@ -150,6 +158,67 @@ export class Aws extends TerraformStack {
             networkMode: 'awsvpc',
         })
 
+        const subnets = new DataAwsSubnets(this, 'Subnets', {});
+
+        const securityGroups = new DataAwsSecurityGroups(this, 'SecurityGroups');
+
+        const autoscalerTaskDefinition = new EcsTaskDefinition(this, 'AutoscalerTaskDefinition', {
+            family: 'Autoscaler',
+            taskRoleArn: autoscalerRole.arn,
+            executionRoleArn: ecsTaskExecutionRole.arn,
+            containerDefinitions: Fn.jsonencode([
+                {
+                    name: 'autoscaler',
+                    image: 'ghcr.io/hi-fi/gha-runners-on-managed-env:latest',
+                    essential: true,
+                    environment: [
+                        {
+                            name: 'PAT',
+                            value: pat.value
+                        },
+                        {
+                            name: 'TASK_DEFINITION_ARN',
+                            value: runnerTaskDefinition.arn
+                        },
+                        {
+                            name: 'ECS_CLUSTER',
+                            value: cluster.arn
+                        },
+                        {
+                            name: 'ECS_SUBNETS',
+                            value: Fn.join(',', subnets.ids)
+                        },
+                        {
+                            name: 'ECS_SECURITY_GROUPS',
+                            value: Fn.join(',', securityGroups.ids)
+                        },
+                        {
+                            name: 'SCALE_SET_NAME',
+                            value: 'ecs-runner-set'
+                        }
+                    ],
+                    logConfiguration: {
+                        logDriver: 'awslogs',
+                        options: {
+                            "awslogs-group": autoscalerLogGroup.name,
+                            "awslogs-region": region.name,
+                            "awslogs-stream-prefix": "ecs",
+                        }
+                    }
+                }
+            ]),
+            cpu: '256',
+            memory: '512',
+            requiresCompatibilities: [
+                'FARGATE'
+            ],
+            runtimePlatform: {
+                cpuArchitecture: 'X86_64',
+                operatingSystemFamily: 'LINUX'
+            },
+            networkMode: 'awsvpc',
+        })
+
         const kanikoTaskDefinition = new EcsTaskDefinition(this, 'KanikoTaskDefinition', {
             family: 'Kaniko',
             taskRoleArn: kanikoRole.arn,
@@ -157,7 +226,7 @@ export class Aws extends TerraformStack {
             containerDefinitions: Fn.jsonencode([
                 {
                     name: 'kaniko',
-                    image: `${kanikoEcr.repositoryUrl}:latest`,
+                    image: 'gcr.io/kaniko-project/executor:v1.23.0',
                     essential: true,
                     command: [
                         '--dockerfile=images/Dockerfile.gha',
@@ -188,45 +257,105 @@ export class Aws extends TerraformStack {
         })
 
         const runnerPolicy = new IamPolicy(this, 'RunnerPolicy', {
-            policy: Fn.jsonencode(                {
-                        'Version': '2012-10-17',
-                        'Statement': [
-                            {
-                                'Sid': 'StartandMonitorTask',
-                                'Effect': 'Allow',
-                                'Action': [
-                                    'ecs:RunTask',
-                                    // Needed for waiting
-                                    'ecs:DescribeTasks',
-                                    'logs:GetLogEvents',
-                                    'iam:PassRole',
-                                ],
-                                'Resource': [
-                                    `${kanikoTaskDefinition.arnWithoutRevision}:*`,
-                                    // Triggerer has to be allowed to pass both task and task execution role
-                                    ecsTaskExecutionRole.arn,
-                                    kanikoRole.arn,
-                                    `arn:aws:ecs:${region.name}:${identity.accountId}:task/${cluster.name}/*`,
-                                    `${kanikoLogGroup.arn}:log-stream:*`,
-                                ]
-                            },
-                            {
-                                'Sid': 'GetVpcInfo',
-                                'Effect': 'Allow',
-                                'Action': [
-                                    'ec2:DescribeSubnets',
-                                    'ec2:DescribeSecurityGroups'
-                                ],
-                                'Resource': '*'
-                            }
+            policy: Fn.jsonencode({
+                'Version': '2012-10-17',
+                'Statement': [
+                    {
+                        'Sid': 'StartandMonitorTask',
+                        'Effect': 'Allow',
+                        'Action': [
+                            'ecs:RunTask',
+                            // Needed for waiting
+                            'ecs:DescribeTasks',
+                            'logs:GetLogEvents',
+                            'iam:PassRole',
+                        ],
+                        'Resource': [
+                            `${kanikoTaskDefinition.arnWithoutRevision}:*`,
+                            // Triggerer has to be allowed to pass both task and task execution role
+                            ecsTaskExecutionRole.arn,
+                            kanikoRole.arn,
+                            `arn:aws:ecs:${region.name}:${identity.accountId}:task/${cluster.name}/*`,
+                            `${kanikoLogGroup.arn}:log-stream:*`,
                         ]
+                    },
+                    {
+                        'Sid': 'GetVpcInfo',
+                        'Effect': 'Allow',
+                        'Action': [
+                            'ec2:DescribeSubnets',
+                            'ec2:DescribeSecurityGroups'
+                        ],
+                        'Resource': '*'
                     }
+                ]
+            }
 
-                    )
-                })
-            new IamRolePolicyAttachment(this, 'RunnerPolicyAttachment', {
-                policyArn: runnerPolicy.arn,
-                role: runnerRole.name
-            })
+            )
+        })
+        new IamRolePolicyAttachment(this, 'RunnerPolicyAttachment', {
+            policyArn: runnerPolicy.arn,
+            role: runnerRole.name
+        })
+
+        const autoscalerPolicy = new IamPolicy(this, 'AutoscalerPolicy', {
+            policy: Fn.jsonencode({
+                'Version': '2012-10-17',
+                'Statement': [
+                    {
+                        'Sid': 'StartandMonitorTask',
+                        'Effect': 'Allow',
+                        'Action': [
+                            'ecs:RunTask',
+                            // Needed for waiting
+                            'ecs:DescribeTasks',
+                            'logs:GetLogEvents',
+                            'iam:PassRole',
+                        ],
+                        'Resource': [
+                            `${runnerTaskDefinition.arnWithoutRevision}:*`,
+                            // Triggerer has to be allowed to pass both task and task execution role
+                            ecsTaskExecutionRole.arn,
+                            runnerRole.arn,
+                            `arn:aws:ecs:${region.name}:${identity.accountId}:task/${cluster.name}/*`,
+                            `${runnerLogGroup.arn}:log-stream:*`,
+                        ]
+                    },
+                    {
+                        'Sid': 'GetVpcInfo',
+                        'Effect': 'Allow',
+                        'Action': [
+                            'ec2:DescribeSubnets',
+                            'ec2:DescribeSecurityGroups'
+                        ],
+                        'Resource': '*'
+                    }
+                ]
+            }
+
+            )
+        })
+        new IamRolePolicyAttachment(this, 'AutoscalerPolicyAttachment', {
+            policyArn: autoscalerPolicy.arn,
+            role: autoscalerRole.name
+        })
+
+        new EcsService(this, 'AutoscalerService', {
+            cluster: cluster.arn,
+            name: 'autoscaler-service',
+            desiredCount: 1,
+            launchType: 'FARGATE',
+            taskDefinition: autoscalerTaskDefinition.arnWithoutRevision,
+            networkConfiguration: {
+                assignPublicIp: true,
+                subnets: subnets.ids,
+                securityGroups: securityGroups.ids
+            },
+            lifecycle: {
+                ignoreChanges: [
+                    'desired_count'
+                ]
+            }
+        })
     }
 }
