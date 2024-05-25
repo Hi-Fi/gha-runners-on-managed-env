@@ -12,7 +12,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/hi-fi/gha-runners-on-managed-env/autoscaler/pkg/aws"
+	"github.com/hi-fi/gha-runners-on-managed-env/autoscaler/pkg/azure"
 	"github.com/hi-fi/gha-runners-on-managed-env/autoscaler/pkg/github"
 )
 
@@ -41,10 +41,10 @@ func main() {
 		logger.Info(fmt.Sprintf("Created scale set %s (ID %x). Runner group id %x", scaleSet.Name, scaleSet.Id, scaleSet.RunnerGroupId))
 	}
 
-	ecsClient, err := aws.GetClient(ctx, logger)
+	acaClient, err := azure.GetClient(ctx, logger)
 
 	if err == nil {
-		client.StartMessagePolling(scaleSet.Id, ecsClient)
+		client.StartMessagePolling(scaleSet.Id, acaClient)
 	} else {
 		logger.Error("Client creation failed.", slog.Any("err", err))
 	}

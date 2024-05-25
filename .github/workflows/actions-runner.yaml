@@ -1,15 +1,14 @@
-name: Publish autoscaler image
+name: Publish Actions Runner image running as root
 
 # TODO: Release job
 on:
   push:
-    branches: [main, aca_autoscaler]
-  pull_request:
-    branches: [main]
+    branches: [aca_autoscaler]
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: hi-fi/root-actions-runner
 
 jobs:
   build-image:
@@ -36,7 +35,7 @@ jobs:
       id: push
       uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
       with:
-        context: autoscaler/
-        file: autoscaler/Dockerfile
+        context: images/
+        file: images/Dockerfile.aca
         push: true
-        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:azure
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:latest

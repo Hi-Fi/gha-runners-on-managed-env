@@ -17,7 +17,7 @@ RUN chmod +x ./entrypoint.sh
 
 ENTRYPOINT ["./entrypoint.sh"]
 
-FROM base as aca
+FROM base as root
 # Required in ACA as sudoing is not possible
 ENV RUNNER_ALLOW_RUNASROOT=true
 

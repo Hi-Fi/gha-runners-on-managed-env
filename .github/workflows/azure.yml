@@ -5,13 +5,18 @@ on:
 
 jobs: 
   build:
-    runs-on: self-hosted
+    runs-on: aca-runner-set
     steps:
       - run: echo "building"
       - run: |
           # Note that ACA running runner can't sudo. In this case runner have to run on root
+          apt update
+          apt install curl podman -y
           curl -sL https://aka.ms/InstallAzureCLIDeb | bash
       # https://github.com/actions/runner/issues/241#issuecomment-2019042651
+      - run: |
+          podman info
+          podman run --rm docker run hello-world
       - run: |
           echo "Executing Kaniko build"
           # Note that login within ACA requires always explicit client ID https://github.com/microsoft/azure-container-apps/issues/325#issuecomment-1202967046
