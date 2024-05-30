@@ -1,4 +1,4 @@
-import { TerraformLocal, TerraformStack, TerraformVariable } from "cdktf";
+import { TerraformLocal, TerraformStack } from "cdktf";
 import { Construct } from "constructs";
 import { GoogleProvider } from '@cdktf/provider-google/lib/provider'
 import { ArtifactRegistryRepository } from "@cdktf/provider-google/lib/artifact-registry-repository";
@@ -7,25 +7,31 @@ import { DataGoogleClientConfig } from "@cdktf/provider-google/lib/data-google-c
 import { ProjectIamCustomRole } from "@cdktf/provider-google/lib/project-iam-custom-role";
 import { ServiceAccount } from "@cdktf/provider-google/lib/service-account";
 import { ProjectIamMember } from "@cdktf/provider-google/lib/project-iam-member";
+import { commonVariables } from "./variables";
+import { CloudRunService } from "@cdktf/provider-google/lib/cloud-run-service";
 
 export class Gcp extends TerraformStack {
     constructor(scope: Construct, id: string) {
-        super(scope, id); 
+        super(scope, id);
 
         new GoogleProvider(this, 'google');
 
         const client = new DataGoogleClientConfig(this, 'client');
 
-        const pat = new TerraformVariable(this, 'PAT', {
-            description: 'Github PAT with Actions:Read and Admin:Read+Write scopes',
-            nullable: false,
-            sensitive: true
-        })
+        const { pat, githubConfigUrl } = commonVariables(this);
 
         const registry = new ArtifactRegistryRepository(this, 'registry', {
             format: 'DOCKER',
+            mode: 'REMOTE_REPOSITORY',
             repositoryId: 'gha-runner-test',
             description: 'Repository to host run and resulting images from GHA runs',
+            remoteRepositoryConfig: {
+                dockerRepository: {
+                    customRepository: {
+                        uri: 'https://ghcr.io'
+                    }
+                }
+            }
         });
 
         const jobSa = new ServiceAccount(this, 'jobServiceAccount', {
@@ -35,7 +41,7 @@ export class Gcp extends TerraformStack {
         const kanikoSa = new ServiceAccount(this, 'kanikoServiceAccount', {
             accountId: 'kaniko-job-sa',
         });
-        
+
         const runnerRole = new ProjectIamCustomRole(this, 'runnerRole', {
             roleId: 'ghaRunnerRole',
             title: 'GHA Runner Role',
@@ -54,7 +60,7 @@ export class Gcp extends TerraformStack {
             member: jobPolicyMember.toString(),
             project: client.project,
             role: runnerRole.id,
-        })    
+        })
 
         const kanikoPolicyMember = new TerraformLocal(this, 'kanikoMember', `serviceAccount:${kanikoSa.email}`)
 
@@ -62,7 +68,7 @@ export class Gcp extends TerraformStack {
             member: kanikoPolicyMember.toString(),
             project: client.project,
             role: 'roles/artifactregistry.writer',
-        })        
+        })
 
         // TODO: check caching https://cloud.google.com/artifact-registry/docs/pull-cached-dockerhub-images
         const kanikoJob = new CloudRunV2Job(this, 'kanikoJob', {
@@ -72,7 +78,7 @@ export class Gcp extends TerraformStack {
                 template: {
                     containers: [
                         {
-                            image: `${registry.location}-docker.pkg.dev/${client.project}/${registry.repositoryId}/kaniko:latest`,
+                            image: 'gcr.io/kaniko-project/executor:latest',
                             args: [
                                 '--dockerfile=images/Dockerfile.gha',
                                 '--context=git://github.com/Hi-Fi/gha-runners-on-managed-env.git',
@@ -93,14 +99,14 @@ export class Gcp extends TerraformStack {
             }
         })
 
-        new CloudRunV2Job(this, 'ghaJob', {
+        const runnerJob = new CloudRunV2Job(this, 'ghaJob', {
             name: 'gha-runner-job',
             location: client.region,
             template: {
                 template: {
                     containers: [
                         {
-                            image: `${registry.location}-docker.pkg.dev/${client.project}/${registry.repositoryId}/gha:latest`,
+                            image: `${registry.location}-docker.pkg.dev/${client.project}/${registry.repositoryId}/actions/actions-runner:latest`,
                             env: [
                                 {
                                     name: 'GH_URL',
@@ -123,6 +129,7 @@ export class Gcp extends TerraformStack {
                                     value: kanikoJob.name
                                 }
                             ],
+                            command: ['/home/runner/run.sh'],
                             resources: {
                                 limits: {
                                     cpu: '1',
@@ -133,6 +140,79 @@ export class Gcp extends TerraformStack {
                     ],
                     maxRetries: 0,
                     serviceAccount: jobSa.email
+                }
+            }
+        })
+
+        const autoscalerSa = new ServiceAccount(this, 'autoscalerServiceAccount', {
+            accountId: 'autoscaler-sa',
+        });
+
+        new ProjectIamCustomRole(this, 'autoscalerRole', {
+            roleId: 'ghaAutoscalerRole',
+            title: 'GHA Autoscaler Role',
+            permissions: [
+                'artifactregistry.dockerimages.get',
+                'artifactregistry.dockerimages.list',
+                'run.jobs.run',
+            ],
+        });
+
+        const autoscalerPolicyMember = new TerraformLocal(this, 'autoscalerMember', `serviceAccount:${autoscalerSa.email}`)
+
+        new ProjectIamMember(this, 'autoscalerRoleBinding', {
+            member: autoscalerPolicyMember.toString(),
+            project: client.project,
+            role: 'roles/run.developer',
+        })
+
+        new CloudRunService(this, 'autoscalerService', {
+            location: client.region,
+            name: 'gha-autoscaler',
+            metadata: {
+                annotations: {
+                    'run.googleapis.com/ingress': 'internal',
+                }
+            },
+            template: {
+                metadata: {
+                    annotations: {
+                        'autoscaling.knative.dev/maxScale': '1',
+                        'autoscaling.knative.dev/minScale': '1',
+                    }
+                },
+                spec: {
+                    containerConcurrency: 1,
+                    containers: [
+                        {
+                            image: `${registry.location}-docker.pkg.dev/${client.project}/${registry.repositoryId}/hi-fi/gha-runners-on-managed-env:gcp`,
+                            env: [
+                                {
+                                    name: 'PAT',
+                                    value: pat.value
+                                },
+                                {
+                                    name: 'GITHUB_CONFIG_URL',
+                                    value: githubConfigUrl.value
+                                },
+                                {
+                                    name: 'JOB_NAME',
+                                    value: runnerJob.id
+                                },
+                                {
+                                    name: 'SCALE_SET_NAME',
+                                    value: 'cr-runner-set'
+                                }
+                            ],
+                            resources: {
+                                limits: {
+                                    cpu: '200m',
+                                    memory: '128Mi'
+                                }
+                            }
+                        }
+                    ],
+                    serviceAccountName: autoscalerSa.email
                 }
             }
         })

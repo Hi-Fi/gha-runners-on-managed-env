@@ -11,8 +11,9 @@ import { IamPolicy } from '@cdktf/provider-aws/lib/iam-policy';
 import { IamRole } from '@cdktf/provider-aws/lib/iam-role';
 import { IamRolePolicyAttachment } from '@cdktf/provider-aws/lib/iam-role-policy-attachment';
 import { AwsProvider } from '@cdktf/provider-aws/lib/provider';
-import { Fn, TerraformStack, TerraformVariable } from 'cdktf';
+import { Fn, TerraformStack } from 'cdktf';
 import { Construct } from 'constructs';
+import { commonVariables } from './variables';
 
 
 export class Aws extends TerraformStack {
@@ -27,11 +28,7 @@ export class Aws extends TerraformStack {
 
         const region = new DataAwsRegion(this, 'Region', {})
 
-        const pat = new TerraformVariable(this, 'PAT', {
-            description: 'Github PAT with Actions:Read and Admin:Read+Write scopes',
-            nullable: false,
-            sensitive: true
-        })
+        const {pat, githubConfigUrl} = commonVariables(this);
 
         const cluster = new EcsCluster(this, 'Cluster', {
             name: 'gha-runner-cluster',
@@ -175,6 +172,10 @@ export class Aws extends TerraformStack {
                         {
                             name: 'PAT',
                             value: pat.value
+                        },
+                        {
+                            name: 'GITHUB_CONFIG_URL',
+                            value: githubConfigUrl.value
                         },
                         {
                             name: 'TASK_DEFINITION_ARN',

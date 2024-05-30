@@ -2,8 +2,6 @@ name: Publish Actions Runner image running as root
 
 # TODO: Release job
 on:
-  push:
-    branches: [aca_autoscaler]
   workflow_dispatch:
 
 env:

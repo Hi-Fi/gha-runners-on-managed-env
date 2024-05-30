@@ -12,6 +12,7 @@ import { LogAnalyticsWorkspace } from "@cdktf/provider-azurerm/lib/log-analytics
 import { RoleDefinition } from "@cdktf/provider-azurerm/lib/role-definition";
 import { DataAzurermSubscription } from "@cdktf/provider-azurerm/lib/data-azurerm-subscription";
 import { ContainerApp } from "@cdktf/provider-azurerm/lib/container-app";
+import { commonVariables } from "./variables";
 
 export class Azure extends TerraformStack {
     constructor(scope: Construct, id: string) {
@@ -26,11 +27,7 @@ export class Azure extends TerraformStack {
 
         const sub = new DataAzurermSubscription(this, 'sub', {});
 
-        const pat = new TerraformVariable(this, 'PAT', {
-            description: 'Github PAT with Actions:Read and Admin:Read+Write scopes',
-            nullable: false,
-            sensitive: true
-        })
+        const { pat, githubConfigUrl } = commonVariables(this);
 
         const location = new TerraformVariable(this, 'location', {
             default: 'westeurope',
@@ -365,7 +362,7 @@ export class Azure extends TerraformStack {
             }
         });
 
-        const autoscalerJob = new ContainerApp(this, 'autoscalerApp', {
+        const autoscalerApp = new ContainerApp(this, 'autoscalerApp', {
             containerAppEnvironmentId: environment.id,
             name: 'autoscaler-app-01',
             resourceGroupName: rg.name,
@@ -377,10 +374,10 @@ export class Azure extends TerraformStack {
                 ]
             },
             secret: [
-               {
-                   name: 'pat',
-                   value: pat.value
-               }
+                {
+                    name: 'pat',
+                    value: pat.value
+                }
             ],
             registry: [
                 {
@@ -389,37 +386,41 @@ export class Azure extends TerraformStack {
                 }
             ],
             template: {
-               container: [
-                   {
-                       // CPU and Memory can be lower with workload profile
-                       cpu: 0.25,
-                       memory: '0.5Gi',
-                       image: `${acr.loginServer}/autoscaler:azure`,
-                       name: 'autoscaler',
-                       env: [
-                           {
-                               name: 'PAT',
-                               secretName: 'pat',
-                           },
-                           {
-                               name: 'SUBSCRIPTION_ID',
-                               value: sub.subscriptionId
-                           }, 
-                           {
-                               name: 'RESOURCE_GROUP_NAME',
-                               value: rg.name
-                           },
-                           {
-                               name: 'JOB_NAME',
-                               value: ghaJob.name
-                           },
-                           {
-                            name: 'SCALE_SET_NAME',
-                            value: 'aca-runner-set'
-                        }
-                       ]    
-                   }
-               ]
+                container: [
+                    {
+                        // CPU and Memory can be lower with workload profile
+                        cpu: 0.25,
+                        memory: '0.5Gi',
+                        image: `${acr.loginServer}/autoscaler:azure`,
+                        name: 'autoscaler',
+                        env: [
+                            {
+                                name: 'PAT',
+                                secretName: 'pat',
+                            },
+                            {
+                                name: 'GITHUB_CONFIG_URL',
+                                value: githubConfigUrl.value
+                            },
+                            {
+                                name: 'SUBSCRIPTION_ID',
+                                value: sub.subscriptionId
+                            },
+                            {
+                                name: 'RESOURCE_GROUP_NAME',
+                                value: rg.name
+                            },
+                            {
+                                name: 'JOB_NAME',
+                                value: ghaJob.name
+                            },
+                            {
+                                name: 'SCALE_SET_NAME',
+                                value: 'aca-runner-set'
+                            }
+                        ]
+                    }
+                ]
             },
             dependsOn: [
                 autoscalerCache
@@ -429,7 +430,7 @@ export class Azure extends TerraformStack {
                     'tags'
                 ]
             }
-       });
+        });
 
         /**
          * @see https://github.com/microsoft/azure-container-apps/issues/1024
@@ -451,7 +452,7 @@ export class Azure extends TerraformStack {
 
         // Allow autoscaler to start the job
         new RoleAssignment(this, 'scaleJobRoleAssignment', {
-            principalId: autoscalerJob.identity.principalId,
+            principalId: autoscalerApp.identity.principalId,
             scope: ghaJob.id,
             roleDefinitionId: role.roleDefinitionResourceId
         })

@@ -39,4 +39,4 @@ jobs:
         context: autoscaler/
         file: autoscaler/Dockerfile
         push: true
-        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:azure
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:gcp
