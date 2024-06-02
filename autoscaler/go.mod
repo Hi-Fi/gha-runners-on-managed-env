@@ -3,6 +3,7 @@ module github.com/hi-fi/gha-runners-on-managed-env/autoscaler
 go 1.21.3
 
 require (
+	cloud.google.com/go/run v1.3.7
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.11.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.5.2
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/appcontainers/armappcontainers/v2 v2.1.0
@@ -12,6 +13,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecs v1.41.10
 	github.com/go-logr/logr v1.4.1
 	github.com/google/uuid v1.6.0
+	golang.org/x/oauth2 v0.19.0
 )
 
 require (
@@ -21,7 +23,6 @@ require (
 	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	cloud.google.com/go/iam v1.1.7 // indirect
 	cloud.google.com/go/longrunning v0.5.6 // indirect
-	cloud.google.com/go/run v1.3.7 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.5.2 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.2.2 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.15 // indirect
@@ -62,7 +63,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.24.0 // indirect
 	golang.org/x/crypto v0.23.0 // indirect
 	golang.org/x/net v0.25.0 // indirect
-	golang.org/x/oauth2 v0.19.0 // indirect
 	golang.org/x/sync v0.7.0 // indirect
 	golang.org/x/sys v0.20.0 // indirect
 	golang.org/x/text v0.15.0 // indirect

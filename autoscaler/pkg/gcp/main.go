@@ -9,13 +9,15 @@ import (
 
 	run "cloud.google.com/go/run/apiv2"
 	"cloud.google.com/go/run/apiv2/runpb"
+	"golang.org/x/oauth2/google"
 )
 
 type Cr struct {
-	ctx     context.Context
-	logger  *slog.Logger
-	client  *run.JobsClient
-	jobName string
+	ctx       context.Context
+	logger    *slog.Logger
+	client    *run.JobsClient
+	jobName   string
+	projectId string
 }
 
 func GetClient(ctx context.Context, logger *slog.Logger) (*Cr, error) {
@@ -25,16 +27,23 @@ func GetClient(ctx context.Context, logger *slog.Logger) (*Cr, error) {
 		return nil, errors.Join(err1)
 	}
 
+	credentials, err := google.FindDefaultCredentials(ctx)
+
+	if err != nil {
+		return nil, err
+	}
+
 	client, err := run.NewJobsClient(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Cr{
-		ctx:     ctx,
-		logger:  logger,
-		client:  client,
-		jobName: jobName,
+		ctx:       ctx,
+		logger:    logger,
+		client:    client,
+		jobName:   jobName,
+		projectId: credentials.ProjectID,
 	}, nil
 }
 
