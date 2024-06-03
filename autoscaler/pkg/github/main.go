@@ -125,8 +125,9 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 					}
 					requestIds = append(requestIds, jobAvailable.RunnerRequestId)
 				} else {
-					asc.logger.Debug(fmt.Sprintf("Not parsing message %s\n", messageType.MessageType))
+					asc.logger.Debug(fmt.Sprintf("Not parsing message %s", messageType.MessageType))
 					lastMessageId = message.MessageId
+					asc.Client.DeleteMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, message.MessageId)
 					continue
 				}
 			}
@@ -135,7 +136,7 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 				continue
 			}
 
-			fmt.Println("Getting JIT config")
+			asc.logger.Debug("Getting JIT config")
 			jitConfig, err := asc.Client.GenerateJitRunnerConfig(asc.ctx, &actions.RunnerScaleSetJitRunnerSetting{}, runnerScaleSetId)
 			if err != nil {
 				asc.logger.Warn("Could not get JIT config", slog.Any("err", err))
@@ -149,7 +150,7 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 				lastMessageId = message.MessageId
 				jobs, err := asc.Client.AcquireJobs(asc.ctx, runnerScaleSetId, session.MessageQueueAccessToken, requestIds)
 				if err == nil {
-					asc.logger.Info(fmt.Sprintf("Acquired jobs %s, removing message...\n", strings.Join(strings.Fields(fmt.Sprint(jobs)), ", ")))
+					asc.logger.Info(fmt.Sprintf("Acquired jobs %s, removing message...", strings.Join(strings.Fields(fmt.Sprint(jobs)), ", ")))
 					asc.Client.DeleteMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, message.MessageId)
 				}
 

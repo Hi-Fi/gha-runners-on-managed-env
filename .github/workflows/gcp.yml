@@ -5,7 +5,7 @@ on:
 
 jobs: 
   build:
-    runs-on: self-hosted
+    runs-on: cr-runner-set
     steps:
       - run: echo "building"
       - run: |

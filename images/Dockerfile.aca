@@ -1,0 +1,5 @@
+FROM ghcr.io/actions/actions-runner:latest as base
+
+USER root
+
+ENV RUNNER_ALLOW_RUNASROOT=true

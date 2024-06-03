@@ -13,6 +13,8 @@ import (
 	"syscall"
 
 	"github.com/hi-fi/gha-runners-on-managed-env/autoscaler/pkg/aws"
+	"github.com/hi-fi/gha-runners-on-managed-env/autoscaler/pkg/azure"
+	"github.com/hi-fi/gha-runners-on-managed-env/autoscaler/pkg/gcp"
 	"github.com/hi-fi/gha-runners-on-managed-env/autoscaler/pkg/github"
 )
 
@@ -29,6 +31,29 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	var handler github.TriggerHandler
+	ecsClient, ecsErr := aws.GetClient(ctx, logger)
+	if ecsClient != nil {
+		logger.Info("Using AWS Elastic Container Service for runners")
+		handler = ecsClient
+	}
+
+	acaClient, acaErr := azure.GetClient(ctx, logger)
+	if handler == nil && acaClient != nil {
+		logger.Info("Using Azure Container Apps for runners")
+		handler = ecsClient
+	}
+	crClient, crErr := gcp.GetClient(ctx, logger)
+	if handler == nil && crClient != nil {
+		logger.Info("Using Google Cloud Run for runners")
+		handler = crClient
+	}
+
+	if handler == nil {
+		logger.Error("Not able to create any client", slog.Any("acaErr", acaErr), slog.Any("ecsErr", ecsErr), slog.Any("crErr", crErr))
+		return
+	}
+
 	scaleSetName := getenv("SCALE_SET_NAME", "local-runner-scale-set")
 	client := github.CreateActionsServiceClient(ctx, pat, logger)
 	defer client.Client.CloseIdleConnections()
@@ -41,10 +66,8 @@ func main() {
 		logger.Info(fmt.Sprintf("Created scale set %s (ID %x). Runner group id %x", scaleSet.Name, scaleSet.Id, scaleSet.RunnerGroupId))
 	}
 
-	ecsClient, err := aws.GetClient(ctx, logger)
-
 	if err == nil {
-		client.StartMessagePolling(scaleSet.Id, ecsClient)
+		client.StartMessagePolling(scaleSet.Id, handler)
 	} else {
 		logger.Error("Client creation failed.", slog.Any("err", err))
 	}

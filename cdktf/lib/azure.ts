@@ -11,6 +11,8 @@ import { RoleAssignment } from "@cdktf/provider-azurerm/lib/role-assignment";
 import { LogAnalyticsWorkspace } from "@cdktf/provider-azurerm/lib/log-analytics-workspace";
 import { RoleDefinition } from "@cdktf/provider-azurerm/lib/role-definition";
 import { DataAzurermSubscription } from "@cdktf/provider-azurerm/lib/data-azurerm-subscription";
+import { ContainerApp } from "@cdktf/provider-azurerm/lib/container-app";
+import { commonVariables } from "./variables";
 
 export class Azure extends TerraformStack {
     constructor(scope: Construct, id: string) {
@@ -25,11 +27,7 @@ export class Azure extends TerraformStack {
 
         const sub = new DataAzurermSubscription(this, 'sub', {});
 
-        const pat = new TerraformVariable(this, 'PAT', {
-            description: 'Github PAT with Actions:Read and Admin:Read+Write scopes',
-            nullable: false,
-            sensitive: true
-        })
+        const { pat, githubConfigUrl } = commonVariables(this);
 
         const location = new TerraformVariable(this, 'location', {
             default: 'westeurope',
@@ -60,6 +58,43 @@ export class Azure extends TerraformStack {
                 ]
             }
         });
+
+        // use caching for images
+        const kanikoCache = new Resource(this, 'kanikoCache', {
+            type: 'Microsoft.ContainerRegistry/registries/cacheRules@2023-01-01-preview',
+            parentId: acr.id,
+            name: 'kaniko-cache',
+            body: {
+                properties: {
+                    sourceRepository: 'gcr.io/kaniko-project/executor',
+                    targetRepository: 'kaniko'
+                }
+            }
+        })
+
+        const runnerCache = new Resource(this, 'runnerCache', {
+            type: 'Microsoft.ContainerRegistry/registries/cacheRules@2023-01-01-preview',
+            parentId: acr.id,
+            name: 'runner-cache',
+            body: {
+                properties: {
+                    sourceRepository: 'ghcr.io/hi-fi/root-actions-runner',
+                    targetRepository: 'root-actions-runner'
+                }
+            }
+        })
+
+        const autoscalerCache = new Resource(this, 'autoscalerCache', {
+            type: 'Microsoft.ContainerRegistry/registries/cacheRules@2023-01-01-preview',
+            parentId: acr.id,
+            name: 'autoscaler-cache',
+            body: {
+                properties: {
+                    sourceRepository: 'ghcr.io/hi-fi/gha-runners-on-managed-env',
+                    targetRepository: 'autoscaler'
+                }
+            }
+        })
 
         const identity = new UserAssignedIdentity(this, 'identity', {
             location,
@@ -100,6 +135,25 @@ export class Azure extends TerraformStack {
                 ]
             }
         });
+
+        new ContainerAppEnvironment(this, 'test', {
+            location,
+            name: 'workload-test-env',
+            resourceGroupName: rg.name,
+            workloadProfile: [
+                {
+                    name: 'Consumption',
+                    workloadProfileType: 'Consumption'
+
+                }
+            ],
+            logAnalyticsWorkspaceId: log.id,
+            lifecycle: {
+                ignoreChanges: [
+                    'tags'
+                ]
+            }
+        })
 
         // Have to use Terraform local variable as trying to use jsonencode directly would fail.
         const dockerConfig = new TerraformLocal(this, 'dockerConfig', {
@@ -154,7 +208,7 @@ export class Azure extends TerraformStack {
                                     `--destination=${acr.loginServer}/results:latest`,
                                     '--target=root'
                                 ],
-                                image: `${acr.loginServer}/kaniko:latest`,
+                                image: `${acr.loginServer}/kaniko:v1.23.0`,
                                 name: 'main',
                                 resources: {
                                     cpu: 1,
@@ -196,6 +250,9 @@ export class Azure extends TerraformStack {
                     }
                 }
             },
+            dependsOn: [
+                kanikoCache
+            ],
             lifecycle: {
                 ignoreChanges: [
                     'tags'
@@ -206,7 +263,7 @@ export class Azure extends TerraformStack {
         /**
          * @see https://learn.microsoft.com/en-us/azure/templates/microsoft.app/jobs?pivots=deployment-language-terraform
          */
-        new Resource(this, 'ghaJob', {
+        const ghaJob = new Resource(this, 'ghaJob', {
             type: 'Microsoft.App/jobs@2023-05-01',
             name: 'gha-runner-job-01',
             parentId: rg.id,
@@ -282,7 +339,9 @@ export class Azure extends TerraformStack {
                                         value: log.workspaceId
                                     }
                                 ],
-                                image: `${acr.loginServer}/gha:latest`,
+                                command: ['/home/runner/run.sh'],
+                                // Have to use custom image as we want to run service as root to be able to install packages
+                                image: `${acr.loginServer}/root-actions-runner:latest`,
                                 name: 'main',
                                 resources: {
                                     cpu: 1,
@@ -293,6 +352,79 @@ export class Azure extends TerraformStack {
                     }
                 }
             },
+            dependsOn: [
+                runnerCache
+            ],
+            lifecycle: {
+                ignoreChanges: [
+                    'tags'
+                ]
+            }
+        });
+
+        const autoscalerApp = new ContainerApp(this, 'autoscalerApp', {
+            containerAppEnvironmentId: environment.id,
+            name: 'autoscaler-app-01',
+            resourceGroupName: rg.name,
+            revisionMode: 'Single',
+            identity: {
+                type: 'SystemAssigned, UserAssigned',
+                identityIds: [
+                    identity.id
+                ]
+            },
+            secret: [
+                {
+                    name: 'pat',
+                    value: pat.value
+                }
+            ],
+            registry: [
+                {
+                    identity: identity.id,
+                    server: acr.loginServer
+                }
+            ],
+            template: {
+                container: [
+                    {
+                        // CPU and Memory can be lower with workload profile
+                        cpu: 0.25,
+                        memory: '0.5Gi',
+                        image: `${acr.loginServer}/autoscaler:azure`,
+                        name: 'autoscaler',
+                        env: [
+                            {
+                                name: 'PAT',
+                                secretName: 'pat',
+                            },
+                            {
+                                name: 'GITHUB_CONFIG_URL',
+                                value: githubConfigUrl.value
+                            },
+                            {
+                                name: 'SUBSCRIPTION_ID',
+                                value: sub.subscriptionId
+                            },
+                            {
+                                name: 'RESOURCE_GROUP_NAME',
+                                value: rg.name
+                            },
+                            {
+                                name: 'JOB_NAME',
+                                value: ghaJob.name
+                            },
+                            {
+                                name: 'SCALE_SET_NAME',
+                                value: 'aca-runner-set'
+                            }
+                        ]
+                    }
+                ]
+            },
+            dependsOn: [
+                autoscalerCache
+            ],
             lifecycle: {
                 ignoreChanges: [
                     'tags'
@@ -316,6 +448,13 @@ export class Azure extends TerraformStack {
                     ],
                 }
             ]
+        })
+
+        // Allow autoscaler to start the job
+        new RoleAssignment(this, 'scaleJobRoleAssignment', {
+            principalId: autoscalerApp.identity.principalId,
+            scope: ghaJob.id,
+            roleDefinitionId: role.roleDefinitionResourceId
         })
 
         // Allow starting of the job
