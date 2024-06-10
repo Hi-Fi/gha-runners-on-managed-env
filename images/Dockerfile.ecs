@@ -1,0 +1,5 @@
+FROM ghcr.io/actions/actions-runner:latest as base
+
+COPY ./images/hooks/ecs/index.js /home/runner/ecs/index.js
+
+ENV ACTIONS_RUNNER_CONTAINER_HOOKS=/home/runner/ecs/index.js

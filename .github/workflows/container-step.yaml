@@ -1,0 +1,17 @@
+name: Container step example
+on: push
+
+jobs:
+  hello_world_job:
+    runs-on: ecs-runner-set
+    name: A job to say hello
+    steps:
+      - name: Run the Container Action
+        id: run
+        uses: actions/container-prebuilt-action@v0
+        with:
+          who-to-greet: Mona Lisa Octocat
+
+      - name: Print Output
+        id: output
+        run: echo "${{ steps.run.outputs.greeting }}"

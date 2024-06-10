@@ -29,6 +29,7 @@
     "constructs": "^10.3.0"
   },
   "devDependencies": {
+    "@aws-sdk/client-ecs": "^3.598.0",
     "@types/jest": "^29.5.12",
     "@types/node": "^20.12.7",
     "cdktf-cli": "^0.20.7",
