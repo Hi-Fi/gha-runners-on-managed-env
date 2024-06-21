@@ -699,7 +699,6 @@ function handleWebsocket(session) {
                         ssm_session_1.ssm.sendACK(wsConnection_1, agentMessage);
                         if (agentMessage.payloadType === 1) {
                             log = textDecoder.decode(agentMessage.payload);
-                            process.stdout.write(textDecoder.decode(agentMessage.payload));
                         }
                         else if (agentMessage.payloadType === 17) {
                             ssm_session_1.ssm.sendInitMessage(wsConnection_1, termOptions);
@@ -1221,7 +1220,7 @@ var utils_1 = __nccwpck_require__(9025);
 var constants_1 = __nccwpck_require__(4865);
 function prepareJob(args, responseFile) {
     return __awaiter(this, void 0, void 0, function () {
-        var extension, containerDefinition, services, createdTask, volumes, err_1, message, err_2, isAlpine, err_3, message;
+        var extension, extarnalsCopy, containerDefinition, services, createdTask, volumes, err_1, message, err_2, isAlpine, err_3, message;
         var _a, _b, _c, _d, _e, _f, _g;
         return __generator(this, function (_h) {
             switch (_h.label) {
@@ -1233,9 +1232,7 @@ function prepareJob(args, responseFile) {
                     core.debug("Reading extensions");
                     extension = (0, utils_1.readExtensionFromFile)();
                     core.debug("copying externals");
-                    return [4 /*yield*/, copyExternalsToRoot()];
-                case 1:
-                    _h.sent();
+                    extarnalsCopy = copyExternalsToRoot();
                     core.info("Creating container definitions");
                     containerDefinition = undefined;
                     if ((_a = args.container) === null || _a === void 0 ? void 0 : _a.image) {
@@ -1259,37 +1256,37 @@ function prepareJob(args, responseFile) {
                     services.forEach(function (service) {
                         volumes.push.apply(volumes, service.volumes);
                     });
-                    _h.label = 2;
-                case 2:
-                    _h.trys.push([2, 4, , 5]);
+                    _h.label = 1;
+                case 1:
+                    _h.trys.push([1, 3, , 4]);
                     return [4 /*yield*/, (0, ecs_1.createTask)(containerDefinition === null || containerDefinition === void 0 ? void 0 : containerDefinition.containerDefinition, services.map(function (service) { return service.containerDefinition; }), volumes, args.container.registry, extension)];
-                case 3:
+                case 2:
                     createdTask = _h.sent();
-                    return [3 /*break*/, 5];
-                case 4:
+                    return [3 /*break*/, 4];
+                case 3:
                     err_1 = _h.sent();
                     core.debug("createTask failed: ".concat(JSON.stringify(err_1)));
                     message = ((_e = (_d = err_1 === null || err_1 === void 0 ? void 0 : err_1.response) === null || _d === void 0 ? void 0 : _d.body) === null || _e === void 0 ? void 0 : _e.message) || err_1;
                     throw new Error("failed to create job task: ".concat(message));
-                case 5:
+                case 4:
                     if (!(createdTask === null || createdTask === void 0 ? void 0 : createdTask.taskArn)) {
                         throw new Error('created task should have ARN');
                     }
                     core.debug("Job task created, waiting for it to come online ".concat(createdTask.taskArn));
-                    _h.label = 6;
-                case 6:
-                    _h.trys.push([6, 8, , 10]);
+                    _h.label = 5;
+                case 5:
+                    _h.trys.push([5, 7, , 9]);
                     return [4 /*yield*/, (0, ecs_1.waitForTaskRunning)(createdTask.taskArn, (0, ecs_1.getPrepareJobTimeoutSeconds)())];
-                case 7:
+                case 6:
                     _h.sent();
-                    return [3 /*break*/, 10];
-                case 8:
+                    return [3 /*break*/, 9];
+                case 7:
                     err_2 = _h.sent();
                     return [4 /*yield*/, (0, ecs_1.pruneTask)()];
-                case 9:
+                case 8:
                     _h.sent();
                     throw new Error("task failed to come online with error: ".concat(err_2));
-                case 10:
+                case 9:
                     // ln -s /tmp/_work/$EXECID _work
                     // core.info("Creating needed volume paths as ECS doesn't support sub paths in mount");
                     // core.debug(await execTaskStep(
@@ -1304,21 +1301,24 @@ function prepareJob(args, responseFile) {
                     // ))
                     core.debug('Job task is ready for traffic');
                     isAlpine = false;
-                    _h.label = 11;
-                case 11:
-                    _h.trys.push([11, 13, , 14]);
+                    _h.label = 10;
+                case 10:
+                    _h.trys.push([10, 12, , 13]);
                     return [4 /*yield*/, (0, ecs_1.isTaskContainerAlpine)(createdTask.taskArn, constants_1.JOB_CONTAINER_NAME)];
-                case 12:
+                case 11:
                     isAlpine = _h.sent();
-                    return [3 /*break*/, 14];
-                case 13:
+                    return [3 /*break*/, 13];
+                case 12:
                     err_3 = _h.sent();
                     core.debug("Failed to determine if the task is alpine: ".concat(JSON.stringify(err_3)));
                     message = ((_g = (_f = err_3 === null || err_3 === void 0 ? void 0 : err_3.response) === null || _f === void 0 ? void 0 : _f.body) === null || _g === void 0 ? void 0 : _g.message) || err_3;
                     throw new Error("failed to determine if the task is alpine: ".concat(message));
-                case 14:
+                case 13:
                     core.debug("Setting isAlpine to ".concat(isAlpine));
                     generateResponseFile(responseFile, createdTask, isAlpine);
+                    return [4 /*yield*/, extarnalsCopy];
+                case 14:
+                    _h.sent();
                     return [2 /*return*/];
             }
         });
@@ -39345,7 +39345,6 @@ function handleWebsocket(session) {
                         ssm_session_1.ssm.sendACK(wsConnection_1, agentMessage);
                         if (agentMessage.payloadType === 1) {
                             log = textDecoder.decode(agentMessage.payload);
-                            process.stdout.write(textDecoder.decode(agentMessage.payload));
                         }
                         else if (agentMessage.payloadType === 17) {
                             ssm_session_1.ssm.sendInitMessage(wsConnection_1, termOptions);

@@ -1,9 +1,19 @@
 name: Container step example
-on: push
+on: 
+  workflow_dispatch:
+    inputs:
+      runner:
+        desctiption: Runner to use
+        required: true
+        type: choice
+        options:
+          - ecs-runner-set
+          - aca-runner-set
+          - cr-runner-set
 
 jobs:
   hello_world_job:
-    runs-on: ecs-runner-set
+    runs-on: ${{ github.event.inputs.runner }}
     name: A job to say hello
     steps:
       - name: Run the Container Action
