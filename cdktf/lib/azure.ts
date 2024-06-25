@@ -81,8 +81,8 @@ export class Azure extends TerraformStack {
             name: 'runner-cache',
             body: {
                 properties: {
-                    sourceRepository: 'ghcr.io/hi-fi/root-actions-runner',
-                    targetRepository: 'root-actions-runner'
+                    sourceRepository: 'ghcr.io/hi-fi/actions-runner',
+                    targetRepository: 'actions-runner'
                 }
             }
         })
@@ -155,7 +155,7 @@ export class Azure extends TerraformStack {
             }
         });
 
-        new ContainerAppEnvironmentStorage(this, 'acaenvstorage', {
+        const acaEnvStorage = new ContainerAppEnvironmentStorage(this, 'acaenvstorage', {
             accessKey: storageAccount.primaryAccessKey,
             accessMode: 'ReadWrite',
             accountName: storageAccount.name,
@@ -269,6 +269,8 @@ export class Azure extends TerraformStack {
             }
         });
 
+        const runnerVolumeName = 'work'
+
         /**
          * @see https://learn.microsoft.com/en-us/azure/templates/microsoft.app/jobs?pivots=deployment-language-terraform
          */
@@ -337,17 +339,38 @@ export class Azure extends TerraformStack {
                                     },
                                     {
                                         name: 'STORAGE_NAME',
-                                        value: storageAccount.name
+                                        value: acaEnvStorage.name
+                                    },
+                                    {
+                                        name: 'SUBSCRIPTION_ID',
+                                        value: sub.subscriptionId
+                                    },
+                                    {
+                                        name: 'ACA_ENVIRONMENT_ID',
+                                        value: environment.id
                                     }
                                 ],
-                                command: ['/home/runner/run.sh'],
+                                command: ['/bin/sh', '-c', 'export EXECID=$(cat /proc/sys/kernel/random/uuid) && mkdir -p /tmp/_work/$EXECID && ln -s /tmp/_work/$EXECID _work && /home/runner/run.sh ; rm -r /tmp/_work/$EXECID'],
                                 // Have to use custom image as we want to run service as root to be able to install packages
-                                image: `${acr.loginServer}/root-actions-runner:latest`,
+                                image: `${acr.loginServer}/actions-runner:aca`,
                                 name: 'main',
                                 resources: {
                                     cpu: 1,
                                     memory: '2Gi'
                                 },
+                                volumeMounts: [
+                                    {
+                                        mountPath: '/tmp/_work',
+                                        volumeName: runnerVolumeName,
+                                    }
+                                ]
+                            }
+                        ],
+                        volumes: [
+                            {
+                                name: runnerVolumeName,
+                                storageName: acaEnvStorage.name,
+                                storageType: 'AzureFile'
                             }
                         ]
                     }
@@ -402,6 +425,10 @@ export class Azure extends TerraformStack {
                             {
                                 name: 'GITHUB_CONFIG_URL',
                                 value: githubConfigUrl.value
+                            },
+                            {
+                                name: 'AZURE_TENANT_ID',
+                                value: sub.tenantId,
                             },
                             {
                                 name: 'SUBSCRIPTION_ID',
