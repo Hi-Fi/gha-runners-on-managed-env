@@ -13,6 +13,9 @@ import { RoleDefinition } from "@cdktf/provider-azurerm/lib/role-definition";
 import { DataAzurermSubscription } from "@cdktf/provider-azurerm/lib/data-azurerm-subscription";
 import { ContainerApp } from "@cdktf/provider-azurerm/lib/container-app";
 import { commonVariables } from "./variables";
+import { StorageAccount } from "@cdktf/provider-azurerm/lib/storage-account";
+import { StorageShare } from "@cdktf/provider-azurerm/lib/storage-share";
+import { ContainerAppEnvironmentStorage } from "@cdktf/provider-azurerm/lib/container-app-environment-storage";
 
 export class Azure extends TerraformStack {
     constructor(scope: Construct, id: string) {
@@ -124,6 +127,22 @@ export class Azure extends TerraformStack {
             }
         })
 
+        const storageAccount = new StorageAccount(this, 'storageAccount', {
+            accountReplicationType: 'LRS',
+            accountTier: 'Standard',
+            location,
+            name: 'ghaexamplestorageaccount',
+            resourceGroupName: rg.name,
+            largeFileShareEnabled: true,
+        })
+
+        const storageShare = new StorageShare(this, 'storageShare', {
+            name: 'ghaexampleshare',
+            quota: 1024,
+            storageAccountName: storageAccount.name,
+            enabledProtocol: 'SMB'
+        })
+
         const environment = new ContainerAppEnvironment(this, 'acaenv', {
             location,
             name: 'gha-runner-job-environment',
@@ -136,23 +155,13 @@ export class Azure extends TerraformStack {
             }
         });
 
-        new ContainerAppEnvironment(this, 'test', {
-            location,
-            name: 'workload-test-env',
-            resourceGroupName: rg.name,
-            workloadProfile: [
-                {
-                    name: 'Consumption',
-                    workloadProfileType: 'Consumption'
-
-                }
-            ],
-            logAnalyticsWorkspaceId: log.id,
-            lifecycle: {
-                ignoreChanges: [
-                    'tags'
-                ]
-            }
+        new ContainerAppEnvironmentStorage(this, 'acaenvstorage', {
+            accessKey: storageAccount.primaryAccessKey,
+            accessMode: 'ReadWrite',
+            accountName: storageAccount.name,
+            containerAppEnvironmentId: environment.id,
+            name: 'gharunnerjobstorage',
+            shareName: storageShare.name,
         })
 
         // Have to use Terraform local variable as trying to use jsonencode directly would fail.
@@ -303,18 +312,6 @@ export class Azure extends TerraformStack {
                         containers: [
                             {
                                 env: [
-                                    {
-                                        name: 'GH_URL',
-                                        value: 'https://github.com/Hi-Fi/gha-runners-on-managed-env'
-                                    },
-                                    {
-                                        name: 'REGISTRATION_TOKEN_API_URL',
-                                        value: 'https://api.github.com/repos/Hi-Fi/gha-runners-on-managed-env/actions/runners/registration-token'
-                                    },
-                                    {
-                                        name: 'GITHUB_PAT',
-                                        secretRef: 'github-pat'
-                                    },
                                     // https://github.com/microsoft/azure-container-apps/issues/502#issuecomment-1340225438
                                     {
                                         name: 'APPSETTING_WEBSITE_SITE_NAME',
@@ -337,6 +334,10 @@ export class Azure extends TerraformStack {
                                     {
                                         name: 'LOG_ID',
                                         value: log.workspaceId
+                                    },
+                                    {
+                                        name: 'STORAGE_NAME',
+                                        value: storageAccount.name
                                     }
                                 ],
                                 command: ['/home/runner/run.sh'],
@@ -417,7 +418,7 @@ export class Azure extends TerraformStack {
                             {
                                 name: 'SCALE_SET_NAME',
                                 value: 'aca-runner-set'
-                            }
+                            },
                         ]
                     }
                 ]
@@ -436,7 +437,7 @@ export class Azure extends TerraformStack {
          * @see https://github.com/microsoft/azure-container-apps/issues/1024
          */
         const role = new RoleDefinition(this, 'jobRole', {
-            name: 'job-start-role',
+            name: 'gha-example-job-start-role',
             scope: sub.id,
             permissions: [
                 {
