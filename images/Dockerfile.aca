@@ -1,5 +1,29 @@
+FROM golang:1.22.3 as builder
+
+# Make static bundle to work with scratch/distroless
+ENV CGO_ENABLED=0
+
+WORKDIR /build
+
+COPY ./utils/http-executor/go.mod ./
+
+RUN go mod download
+
+COPY utils/http-executor .
+
+ARG TARGETOS=linux TARGETARCH=amd64 TARGETVARIANT=v7
+
+RUN export GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${TARGETVARIANT#v} && \
+  go build -trimpath -v -o /out/executor main.go
+
 FROM ghcr.io/actions/actions-runner:latest as base
+
+COPY --from=builder /out/executor .
 
 USER root
 
 ENV RUNNER_ALLOW_RUNASROOT=true
+
+COPY ./images/hooks/aca/index.js /home/runner/aca/index.js
+
+ENV ACTIONS_RUNNER_CONTAINER_HOOKS=/home/runner/aca/index.js
