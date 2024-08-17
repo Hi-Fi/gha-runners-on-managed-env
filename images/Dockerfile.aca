@@ -5,11 +5,11 @@ ENV CGO_ENABLED=0
 
 WORKDIR /build
 
-COPY ./utils/http-executor/go.mod ./
+COPY ./utils/executor/go.mod ./
 
 RUN go mod download
 
-COPY utils/http-executor .
+COPY utils/executor .
 
 ARG TARGETOS=linux TARGETARCH=amd64 TARGETVARIANT=v7
 
@@ -18,7 +18,8 @@ RUN export GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${TARGETVARIANT#v} && \
 
 FROM ghcr.io/actions/actions-runner:latest as base
 
-COPY --from=builder /out/executor .
+# Copy next to other externals so gets copied at same go
+COPY --from=builder /out/executor /home/runner/externals/executor
 
 USER root
 

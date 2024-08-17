@@ -67,54 +67,18 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.requiredPermissions = exports.POD_VOLUME_NAME = void 0;
-exports.createJob = createJob;
-exports.execTaskStep = execTaskStep;
-exports.getPrepareJobTimeoutSeconds = getPrepareJobTimeoutSeconds;
-exports.isTaskContainerAlpine = isTaskContainerAlpine;
+exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.createJob = exports.POD_VOLUME_NAME = void 0;
 var core = __importStar(__nccwpck_require__(2186));
 var arm_appcontainers_1 = __nccwpck_require__(223);
 var identity_1 = __nccwpck_require__(3084);
+var server_1 = __nccwpck_require__(6660);
 var subscriptionId = (_a = process.env.SUBSCRIPTION_ID) !== null && _a !== void 0 ? _a : "00000000-0000-0000-0000-000000000000";
 var acaClient = new arm_appcontainers_1.ContainerAppsAPIClient(new identity_1.DefaultAzureCredential(), subscriptionId);
-var cluster = process.env.ECS_CLUSTER_NAME;
 var DEFAULT_WAIT_FOR_POD_TIME_SECONDS = 10 * 60; // 10 min
 exports.POD_VOLUME_NAME = 'work';
-exports.requiredPermissions = [
-    {
-        group: '',
-        verbs: ['get', 'list', 'create', 'delete'],
-        resource: 'pods',
-        subresource: ''
-    },
-    {
-        group: '',
-        verbs: ['get', 'create'],
-        resource: 'pods',
-        subresource: 'exec'
-    },
-    {
-        group: '',
-        verbs: ['get', 'list', 'watch'],
-        resource: 'pods',
-        subresource: 'log'
-    },
-    {
-        group: 'batch',
-        verbs: ['get', 'list', 'create', 'delete'],
-        resource: 'jobs',
-        subresource: ''
-    },
-    {
-        group: '',
-        verbs: ['create', 'delete', 'get', 'list'],
-        resource: 'secrets',
-        subresource: ''
-    }
-];
-function createJob(jobTaskProperties, services, _registry) {
+function createJob(jobTaskProperties, services) {
     return __awaiter(this, void 0, void 0, function () {
-        var containers, job, execution;
+        var containers, jobEnvelope, job, execution;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -125,20 +89,31 @@ function createJob(jobTaskProperties, services, _registry) {
                     if (services === null || services === void 0 ? void 0 : services.length) {
                         containers.push.apply(containers, services);
                     }
-                    return [4 /*yield*/, acaClient.jobs.beginCreateOrUpdateAndWait(process.env.RG_NAME, "job-task-".concat(Date.now()), {
-                            location: 'westeurope',
-                            environmentId: process.env.ACA_ENVIRONMENT_ID,
-                            template: {
-                                containers: containers,
-                                volumes: [
-                                    {
-                                        name: 'work',
-                                        storageName: process.env.STORAGE_NAME,
-                                        storageType: 'AzureFile',
-                                    }
-                                ]
-                            }
-                        })];
+                    jobEnvelope = {
+                        location: 'westeurope',
+                        configuration: {
+                            triggerType: 'Manual',
+                            replicaTimeout: 1800,
+                            replicaRetryLimit: 0,
+                            manualTriggerConfig: {
+                                parallelism: 1,
+                                replicaCompletionCount: 1
+                            },
+                        },
+                        environmentId: process.env.ACA_ENVIRONMENT_ID,
+                        template: {
+                            containers: containers,
+                            volumes: [
+                                {
+                                    name: 'work',
+                                    storageName: process.env.STORAGE_NAME,
+                                    storageType: 'NfsAzureFile',
+                                }
+                            ]
+                        }
+                    };
+                    core.debug(JSON.stringify(jobEnvelope));
+                    return [4 /*yield*/, acaClient.jobs.beginCreateOrUpdateAndWait(process.env.RG_NAME, "job-task-".concat(Date.now()), jobEnvelope)];
                 case 1:
                     job = _a.sent();
                     return [4 /*yield*/, acaClient.jobs.beginStartAndWait(process.env.RG_NAME, job.name)];
@@ -152,13 +127,23 @@ function createJob(jobTaskProperties, services, _registry) {
         });
     });
 }
-function execTaskStep(_command, _taskArn, _containerName) {
+exports.createJob = createJob;
+function execTaskStep(command, _taskArn, _containerName) {
     return __awaiter(this, void 0, void 0, function () {
+        var returnCode;
         return __generator(this, function (_a) {
-            throw new Error("exec task step not implemented");
+            switch (_a.label) {
+                case 0:
+                    server_1.LongPollingServer.executeCommand(command.join(" "));
+                    return [4 /*yield*/, server_1.LongPollingServer.waitForJobCompletion()];
+                case 1:
+                    returnCode = _a.sent();
+                    return [2 /*return*/, returnCode == 0];
+            }
         });
     });
 }
+exports.execTaskStep = execTaskStep;
 // export async function waitForJobToComplete(jobName: string): Promise<void> {
 //   const backOffManager = new BackOffManager()
 //   while (true) {
@@ -226,6 +211,7 @@ function getPrepareJobTimeoutSeconds() {
     }
     return timeoutSeconds;
 }
+exports.getPrepareJobTimeoutSeconds = getPrepareJobTimeoutSeconds;
 // async function isTaskSucceeded(taskArn: string): Promise<boolean> {
 //   const command = new DescribeTasksCommand({
 //     tasks: [
@@ -248,11 +234,12 @@ function isTaskContainerAlpine(taskArn, containerName) {
                     ], taskArn, containerName)];
                 case 1:
                     output = _a.sent();
-                    return [2 /*return*/, output.trim() === '0'];
+                    return [2 /*return*/, output];
             }
         });
     });
 }
+exports.isTaskContainerAlpine = isTaskContainerAlpine;
 var BackOffManager = /** @class */ (function () {
     function BackOffManager(throwAfterSeconds) {
         this.throwAfterSeconds = throwAfterSeconds;
@@ -381,26 +368,41 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.PodPhase = exports.ENV_USE_KUBE_SCHEDULER = exports.ENV_HOOK_TEMPLATE_PATH = exports.DEFAULT_CONTAINER_ENTRY_POINT = exports.DEFAULT_CONTAINER_ENTRY_POINT_ARGS = void 0;
-exports.containerVolumes = containerVolumes;
-exports.writeEntryPointScript = writeEntryPointScript;
-exports.generateContainerName = generateContainerName;
-exports.useKubeScheduler = useKubeScheduler;
-exports.fixArgs = fixArgs;
+exports.fixArgs = exports.PodPhase = exports.useKubeScheduler = exports.generateContainerName = exports.writeEntryPointScript = exports.containerVolumes = exports.getIpAddress = exports.ENV_USE_KUBE_SCHEDULER = exports.ENV_HOOK_TEMPLATE_PATH = exports.DEFAULT_CONTAINER_ENTRY_POINT = void 0;
 var fs = __importStar(__nccwpck_require__(7147));
 var path = __importStar(__nccwpck_require__(1017));
 var uuid_1 = __nccwpck_require__(5840);
 var index_1 = __nccwpck_require__(4053);
 var shlex = __importStar(__nccwpck_require__(5659));
-exports.DEFAULT_CONTAINER_ENTRY_POINT_ARGS = ["-f", "/dev/null"];
-exports.DEFAULT_CONTAINER_ENTRY_POINT = 'tail';
+var os_1 = __nccwpck_require__(2037);
+// Mounted directory in job containers
+exports.DEFAULT_CONTAINER_ENTRY_POINT = '/__e/executor';
 exports.ENV_HOOK_TEMPLATE_PATH = 'ACTIONS_RUNNER_CONTAINER_HOOK_TEMPLATE';
 exports.ENV_USE_KUBE_SCHEDULER = 'ACTIONS_RUNNER_USE_KUBE_SCHEDULER';
+function getIpAddress() {
+    var nics = (0, os_1.networkInterfaces)();
+    var ipAddresses = [];
+    Object.entries(nics).forEach(function (_a) {
+        var _nicName = _a[0], nicInfo = _a[1];
+        nicInfo === null || nicInfo === void 0 ? void 0 : nicInfo.forEach(function (net) {
+            // We're interested only on IPv4 addresses, that are not 169.254 "incorrect" IP
+            if (net.family === 'IPv4' && !net.internal && !net.address.startsWith("169.254")) {
+                ipAddresses.push(net.address);
+            }
+        });
+    });
+    console.log("Job has following IP address(es): ".concat(ipAddresses.join(', ')));
+    return ipAddresses;
+}
+exports.getIpAddress = getIpAddress;
 // TODO: Have to insert volume for each subpath or do ln commands. Still would need list of paths
 function containerVolumes(userMountVolumes, jobContainer, containerAction) {
+    var _a;
     if (userMountVolumes === void 0) { userMountVolumes = []; }
     if (jobContainer === void 0) { jobContainer = true; }
     if (containerAction === void 0) { containerAction = false; }
+    // This is set by runner start script so should be always present.
+    var executionId = (_a = process.env.EXECID) !== null && _a !== void 0 ? _a : '';
     var mounts = [
         {
             volumeName: index_1.POD_VOLUME_NAME,
@@ -414,15 +416,15 @@ function containerVolumes(userMountVolumes, jobContainer, containerAction) {
         mounts.push({
             volumeName: index_1.POD_VOLUME_NAME,
             mountPath: '/github/workspace',
-            subPath: workspaceRelativePath
+            subPath: path.join(executionId, workspaceRelativePath)
         }, {
             volumeName: index_1.POD_VOLUME_NAME,
             mountPath: '/github/file_commands',
-            subPath: '_temp/_runner_file_commands'
+            subPath: path.join(executionId, '_temp/_runner_file_commands')
         }, {
             volumeName: index_1.POD_VOLUME_NAME,
             mountPath: '/github/workflow',
-            subPath: '_temp/_github_workflow'
+            subPath: path.join(executionId, '_temp/_github_workflow')
         });
         return mounts;
     }
@@ -432,15 +434,15 @@ function containerVolumes(userMountVolumes, jobContainer, containerAction) {
     mounts.push({
         volumeName: index_1.POD_VOLUME_NAME,
         mountPath: '/__e',
-        subPath: 'externals'
+        subPath: path.join(executionId, 'externals')
     }, {
         volumeName: index_1.POD_VOLUME_NAME,
         mountPath: '/github/home',
-        subPath: '_temp/_github_home'
+        subPath: path.join(executionId, '_temp/_github_home')
     }, {
         volumeName: index_1.POD_VOLUME_NAME,
         mountPath: '/github/workflow',
-        subPath: '_temp/_github_workflow'
+        subPath: path.join(executionId, '_temp/_github_workflow')
     });
     if (!(userMountVolumes === null || userMountVolumes === void 0 ? void 0 : userMountVolumes.length)) {
         return mounts;
@@ -466,6 +468,7 @@ function containerVolumes(userMountVolumes, jobContainer, containerAction) {
     }
     return mounts;
 }
+exports.containerVolumes = containerVolumes;
 function writeEntryPointScript(workingDirectory, entryPoint, entryPointArgs, prependPath, environmentVariables) {
     var exportPath = '';
     if (prependPath === null || prependPath === void 0 ? void 0 : prependPath.length) {
@@ -502,6 +505,7 @@ function writeEntryPointScript(workingDirectory, entryPoint, entryPointArgs, pre
         runnerPath: entryPointPath
     };
 }
+exports.writeEntryPointScript = writeEntryPointScript;
 function generateContainerName(image) {
     var nameWithTag = image.split('/').pop();
     var name = nameWithTag === null || nameWithTag === void 0 ? void 0 : nameWithTag.split(':').at(0);
@@ -510,6 +514,7 @@ function generateContainerName(image) {
     }
     return name;
 }
+exports.generateContainerName = generateContainerName;
 // Overwrite or append based on container options
 //
 // Keep in mind, envs and volumes could be passed as fields in container definition
@@ -606,6 +611,7 @@ function generateContainerName(image) {
 function useKubeScheduler() {
     return process.env[exports.ENV_USE_KUBE_SCHEDULER] === 'true';
 }
+exports.useKubeScheduler = useKubeScheduler;
 var PodPhase;
 (function (PodPhase) {
     PodPhase["PENDING"] = "Pending";
@@ -614,7 +620,7 @@ var PodPhase;
     PodPhase["FAILED"] = "Failed";
     PodPhase["UNKNOWN"] = "Unknown";
     PodPhase["COMPLETED"] = "Completed";
-})(PodPhase || (exports.PodPhase = PodPhase = {}));
+})(PodPhase = exports.PodPhase || (exports.PodPhase = {}));
 // function mergeLists<T>(base?: T[], from?: T[]): T[] {
 //   const b: T[] = base || []
 //   if (!from?.length) {
@@ -624,8 +630,9 @@ var PodPhase;
 //   return b
 // }
 function fixArgs(args) {
-    return shlex.split(args.join(' '));
+    return shlex.split((args !== null && args !== void 0 ? args : []).join(' '));
 }
+exports.fixArgs = fixArgs;
 
 
 /***/ }),
@@ -672,7 +679,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.cleanupJob = cleanupJob;
+exports.cleanupJob = void 0;
 function cleanupJob() {
     return __awaiter(this, void 0, void 0, function () {
         return __generator(this, function (_a) {
@@ -681,6 +688,7 @@ function cleanupJob() {
         });
     });
 }
+exports.cleanupJob = cleanupJob;
 
 
 /***/ }),
@@ -690,14 +698,12 @@ function cleanupJob() {
 
 "use strict";
 
+var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.RunnerInstanceLabel = exports.JOB_CONTAINER_EXTENSION_NAME = exports.JOB_CONTAINER_NAME = exports.CONTAINER_EXTENSION_PREFIX = exports.STEP_POD_NAME_SUFFIX_LENGTH = exports.MAX_POD_NAME_LENGTH = void 0;
-exports.getRunnerPodName = getRunnerPodName;
-exports.getJobPodName = getJobPodName;
-exports.getStepPodName = getStepPodName;
-exports.getVolumeClaimName = getVolumeClaimName;
-exports.getSecretName = getSecretName;
+exports.RunnerInstanceLabel = exports.JOB_CONTAINER_EXTENSION_NAME = exports.JOB_CONTAINER_NAME = exports.CONTAINER_EXTENSION_PREFIX = exports.STEP_POD_NAME_SUFFIX_LENGTH = exports.MAX_POD_NAME_LENGTH = exports.getSecretName = exports.getVolumeClaimName = exports.getStepPodName = exports.getJobPodName = exports.getRunnerPodName = exports.RUNNER_WORKSPACE = exports.RUNNER_SERVER_PORT = void 0;
 var uuid_1 = __nccwpck_require__(5840);
+exports.RUNNER_SERVER_PORT = (_a = process.env.RUNNER_SERVER_PORT) !== null && _a !== void 0 ? _a : '5000';
+exports.RUNNER_WORKSPACE = process.env['RUNNER_WORKSPACE'];
 function getRunnerPodName() {
     var name = process.env.ACTIONS_RUNNER_POD_NAME;
     if (!name) {
@@ -705,12 +711,15 @@ function getRunnerPodName() {
     }
     return name;
 }
+exports.getRunnerPodName = getRunnerPodName;
 function getJobPodName() {
     return "".concat(getRunnerPodName().substring(0, exports.MAX_POD_NAME_LENGTH - '-workflow'.length), "-workflow");
 }
+exports.getJobPodName = getJobPodName;
 function getStepPodName() {
     return "".concat(getRunnerPodName().substring(0, exports.MAX_POD_NAME_LENGTH - ('-step-'.length + exports.STEP_POD_NAME_SUFFIX_LENGTH)), "-step-").concat((0, uuid_1.v4)().substring(0, exports.STEP_POD_NAME_SUFFIX_LENGTH));
 }
+exports.getStepPodName = getStepPodName;
 function getVolumeClaimName() {
     var name = process.env.ACTIONS_RUNNER_CLAIM_NAME;
     if (!name) {
@@ -718,9 +727,11 @@ function getVolumeClaimName() {
     }
     return name;
 }
+exports.getVolumeClaimName = getVolumeClaimName;
 function getSecretName() {
     return "".concat(getRunnerPodName().substring(0, exports.MAX_POD_NAME_LENGTH - ('-secret-'.length + exports.STEP_POD_NAME_SUFFIX_LENGTH)), "-secret-").concat((0, uuid_1.v4)().substring(0, exports.STEP_POD_NAME_SUFFIX_LENGTH));
 }
+exports.getSecretName = getSecretName;
 exports.MAX_POD_NAME_LENGTH = 63;
 exports.STEP_POD_NAME_SUFFIX_LENGTH = 8;
 exports.CONTAINER_EXTENSION_PREFIX = '$';
@@ -846,23 +857,30 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
+var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
+    if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
+        if (ar || !(i in from)) {
+            if (!ar) ar = Array.prototype.slice.call(from, 0, i);
+            ar[i] = from[i];
+        }
+    }
+    return to.concat(ar || Array.prototype.slice.call(from));
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.prepareJob = prepareJob;
-exports.createContainerDefinition = createContainerDefinition;
+exports.createContainerDefinition = exports.prepareJob = void 0;
 var core = __importStar(__nccwpck_require__(2186));
 var io = __importStar(__nccwpck_require__(7436));
-var hooklib_1 = __nccwpck_require__(7615);
 var path_1 = __importDefault(__nccwpck_require__(1017));
 var aca_1 = __nccwpck_require__(4053);
 var utils_1 = __nccwpck_require__(9297);
 var constants_1 = __nccwpck_require__(4865);
-function prepareJob(args, responseFile) {
+function prepareJob(args) {
+    var _a, _b, _c, _d, _e, _f;
     return __awaiter(this, void 0, void 0, function () {
         var extarnalsCopy, containerDefinition, services, createdJob, err_1, message, isAlpine, err_2, message;
-        var _a, _b, _c, _d, _e, _f;
         return __generator(this, function (_g) {
             switch (_g.label) {
                 case 0:
@@ -893,7 +911,7 @@ function prepareJob(args, responseFile) {
                     _g.label = 1;
                 case 1:
                     _g.trys.push([1, 3, , 4]);
-                    return [4 /*yield*/, (0, aca_1.createJob)(containerDefinition, services, args.container.registry)];
+                    return [4 /*yield*/, (0, aca_1.createJob)(containerDefinition, services)];
                 case 2:
                     createdJob = _g.sent();
                     return [3 /*break*/, 4];
@@ -907,27 +925,6 @@ function prepareJob(args, responseFile) {
                         throw new Error('created task should have ID');
                     }
                     core.debug("Job task created, waiting for it to come online ".concat(createdJob.id));
-                    // try {
-                    //   await waitForTaskRunning(
-                    //     createdJob.id,
-                    //     getPrepareJobTimeoutSeconds()
-                    //   )
-                    // } catch (err) {
-                    //   await pruneTask()
-                    //   throw new Error(`task failed to come online with error: ${err}`)
-                    // }
-                    // ln -s /tmp/_work/$EXECID _work
-                    // core.info("Creating needed volume paths as ECS doesn't support sub paths in mount");
-                    // core.debug(await execTaskStep(
-                    //   [
-                    //     "ln",
-                    //     "-s",
-                    //     "/__w/externals",
-                    //     "/__e"
-                    //   ],
-                    //   createdTask.taskArn,
-                    //   containerDefinition?.name!
-                    // ))
                     core.debug('Job task is ready for traffic');
                     isAlpine = false;
                     _g.label = 5;
@@ -954,29 +951,22 @@ function prepareJob(args, responseFile) {
         });
     });
 }
-function generateResponseFile(responseFile, appJob, isAlpine) {
-    if (!appJob.id) {
-        throw new Error('app task must have ID specified');
-    }
-    var response = {
-        state: {
-            jobPod: appJob.id
-        },
-        context: {},
-        isAlpine: isAlpine
-    };
-    (0, hooklib_1.writeToResponseFile)(responseFile, JSON.stringify(response));
-}
+exports.prepareJob = prepareJob;
 function copyExternalsToRoot() {
     return __awaiter(this, void 0, void 0, function () {
         var workspace;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
-                    workspace = process.env['RUNNER_WORKSPACE'];
+                    workspace = constants_1.RUNNER_WORKSPACE;
                     if (!workspace) return [3 /*break*/, 2];
-                    return [4 /*yield*/, io.cp(path_1.default.join(workspace, '../../externals'), path_1.default.join(workspace, '../externals'), { force: true, recursive: true, copySourceDirectory: false })];
+                    core.debug("Copying externals from ".concat(path_1.default.join(workspace, '../../externals'), " to ").concat(path_1.default.join(workspace, '../externals')));
+                    // We need server binary at new job, so have to wait here
+                    return [4 /*yield*/, io.cp(path_1.default.join(workspace, '../../externals'), path_1.default.join(workspace, '../externals'), { force: true, recursive: true, copySourceDirectory: false })
+                        // promises.push(exec.exec('cp', ['-r', path.join(workspace, '../../externals'), path.join(workspace, '../externals')]))
+                    ];
                 case 1:
+                    // We need server binary at new job, so have to wait here
                     _a.sent();
                     _a.label = 2;
                 case 2: return [2 /*return*/];
@@ -988,62 +978,36 @@ function createContainerDefinition(container, name, jobContainer) {
     if (jobContainer === void 0) { jobContainer = false; }
     if (!container.entryPoint && jobContainer) {
         container.entryPoint = utils_1.DEFAULT_CONTAINER_ENTRY_POINT;
-        container.entryPointArgs = utils_1.DEFAULT_CONTAINER_ENTRY_POINT_ARGS;
     }
     var volumeMounts = (0, utils_1.containerVolumes)(container.userMountVolumes, jobContainer);
     return {
         name: name,
         image: container.image,
-        command: [container.entryPoint],
-        args: (0, utils_1.fixArgs)(container.entryPointArgs),
-        env: Object.entries(container.environmentVariables).map(function (entry) {
+        command: container.entryPoint ? [container.entryPoint] : undefined,
+        args: container.entryPointArgs ? (0, utils_1.fixArgs)(container.entryPointArgs) : undefined,
+        env: __spreadArray(__spreadArray([], Object.entries(container.environmentVariables).map(function (entry) {
             return {
                 name: entry[0],
                 value: entry[1]
             };
-        }),
+        }), true), [
+            {
+                name: 'RUNNER_HOST',
+                value: (0, utils_1.getIpAddress)()[0]
+            },
+            {
+                name: 'RUNNER_PORT',
+                value: constants_1.RUNNER_SERVER_PORT
+            }
+        ], false),
         resources: {
             cpu: 0.5,
-            memory: '1024Gb'
+            memory: '1Gi'
         },
-        volumeMounts: volumeMounts
-        // portMappings: containerPorts(container),
-        // entryPoint: [container.entryPoint],
-        // command: fixArgs(container.entryPointArgs),
-        // workingDirectory: container.workingDirectory,
-        // cpu: 512,
-        // memory: 1024,
-        // environment: Object.entries(container.environmentVariables).map(entry => {
-        //   return {
-        //     name: entry[0],
-        //     value: entry[1] as string
-        //   }
-        // }),
-        // logConfiguration: {
-        //   logDriver: 'awslogs',
-        //   options: {
-        //     'awslogs-group': `/ecs/GHA`,
-        //     'awslogs-region': process.env.AWS_REGION ?? '',
-        //     'awslogs-stream-prefix': name
-        //   }
-        // },
-        // mountPoints: volumeMOuntSettings.mountPoints
+        volumeMounts: volumeMounts,
     };
-    // podContainer.volumeMounts = containerVolumes(
-    //   container.userMountVolumes,
-    //   jobContainer
-    // )
-    // if (!extension) {
-    //   return podContainer
-    // }
-    // const from = extension.spec?.containers?.find(
-    //   c => c.name === CONTAINER_EXTENSION_PREFIX + name
-    // )
-    // if (from) {
-    //   mergeContainerWithOptions(podContainer, from)
-    // }
-    // return podContainer
 }
+exports.createContainerDefinition = createContainerDefinition;
 
 
 /***/ }),
@@ -1112,16 +1076,25 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
+var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
+    if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
+        if (ar || !(i in from)) {
+            if (!ar) ar = Array.prototype.slice.call(from, 0, i);
+            ar[i] = from[i];
+        }
+    }
+    return to.concat(ar || Array.prototype.slice.call(from));
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.runContainerStep = runContainerStep;
+exports.runContainerStep = void 0;
 var core = __importStar(__nccwpck_require__(2186));
 var aca_1 = __nccwpck_require__(6691);
 var utils_1 = __nccwpck_require__(9297);
 var constants_1 = __nccwpck_require__(4865);
 function runContainerStep(stepContainer) {
+    var _a, _b;
     return __awaiter(this, void 0, void 0, function () {
         var container, createdTask, err_1, message;
-        var _a, _b;
         return __generator(this, function (_c) {
             switch (_c.label) {
                 case 0:
@@ -1164,6 +1137,7 @@ function runContainerStep(stepContainer) {
         });
     });
 }
+exports.runContainerStep = runContainerStep;
 function createContainerDefinition(container) {
     var volumeMounts = (0, utils_1.containerVolumes)(undefined, false, true);
     return {
@@ -1171,12 +1145,21 @@ function createContainerDefinition(container) {
         image: container.image,
         command: [container.entryPoint],
         args: (0, utils_1.fixArgs)(container.entryPointArgs),
-        env: Object.entries(container.environmentVariables).map(function (entry) {
+        env: __spreadArray(__spreadArray([], Object.entries(container.environmentVariables).map(function (entry) {
             return {
                 name: entry[0],
                 value: entry[1]
             };
-        }),
+        }), true), [
+            {
+                name: 'RUNNER_HOST',
+                value: (0, utils_1.getIpAddress)()[0]
+            },
+            {
+                name: 'RUNNER_PORT',
+                value: constants_1.RUNNER_SERVER_PORT
+            }
+        ], false),
         resources: {
             cpu: 0.5,
             memory: '1024Gb'
@@ -1284,50 +1267,33 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.runScriptStep = runScriptStep;
+exports.runScriptStep = void 0;
 /* eslint-disable @typescript-eslint/no-unused-vars */
 var fs = __importStar(__nccwpck_require__(7147));
-var core = __importStar(__nccwpck_require__(2186));
 var aca_1 = __nccwpck_require__(4053);
 var utils_1 = __nccwpck_require__(9297);
 var constants_1 = __nccwpck_require__(4865);
-function runScriptStep(args, state, responseFile) {
+function runScriptStep(args, state) {
     return __awaiter(this, void 0, void 0, function () {
-        var entryPoint, entryPointArgs, environmentVariables, _a, containerPath, runnerPath, response, matches, returnCode, err_1, message;
-        var _b, _c, _d;
-        return __generator(this, function (_e) {
-            switch (_e.label) {
+        var entryPoint, entryPointArgs, environmentVariables, _a, containerPath, runnerPath, response;
+        return __generator(this, function (_b) {
+            switch (_b.label) {
                 case 0:
                     entryPoint = args.entryPoint, entryPointArgs = args.entryPointArgs, environmentVariables = args.environmentVariables;
                     _a = (0, utils_1.writeEntryPointScript)(args.workingDirectory, entryPoint, entryPointArgs, args.prependPath, environmentVariables), containerPath = _a.containerPath, runnerPath = _a.runnerPath;
-                    _e.label = 1;
-                case 1:
-                    _e.trys.push([1, 3, 4, 5]);
                     return [4 /*yield*/, (0, aca_1.execTaskStep)(['sh', containerPath], state.jobPod, constants_1.JOB_CONTAINER_NAME)];
-                case 2:
-                    response = _e.sent();
-                    matches = response.match(/SCRIPT_RUN_STATUS: (\d*)/);
-                    if (matches) {
-                        returnCode = (_b = matches[1]) !== null && _b !== void 0 ? _b : '0';
-                        core.info(response.replace(matches[0], ''));
-                        if (Number(returnCode) > 0) {
-                            throw new Error("execution failed");
-                        }
-                    }
-                    return [3 /*break*/, 5];
-                case 3:
-                    err_1 = _e.sent();
-                    core.debug("execPodStep failed: ".concat(JSON.stringify(err_1)));
-                    message = ((_d = (_c = err_1 === null || err_1 === void 0 ? void 0 : err_1.response) === null || _c === void 0 ? void 0 : _c.body) === null || _d === void 0 ? void 0 : _d.message) || err_1;
-                    throw new Error("failed to run script step: ".concat(message));
-                case 4:
+                case 1:
+                    response = _b.sent();
                     fs.rmSync(runnerPath);
-                    return [7 /*endfinally*/];
-                case 5: return [2 /*return*/];
+                    if (!response) {
+                        throw new Error('execPodStep failed');
+                    }
+                    return [2 /*return*/];
             }
         });
     });
 }
+exports.runScriptStep = runScriptStep;
 
 
 /***/ }),
@@ -1402,7 +1368,7 @@ var hooklib_1 = __nccwpck_require__(7615);
 var hooks_1 = __nccwpck_require__(4402);
 function run() {
     return __awaiter(this, void 0, void 0, function () {
-        var input, args, command, responseFile, state, exitCode, _a, error_1;
+        var input, args, command, state, exitCode, _a, error_1;
         return __generator(this, function (_b) {
             switch (_b.label) {
                 case 0:
@@ -1412,7 +1378,6 @@ function run() {
                     input = _b.sent();
                     args = input['args'];
                     command = input['command'];
-                    responseFile = input['responseFile'];
                     state = input['state'];
                     exitCode = 0;
                     core.debug("Selecting to act against ".concat(command, " (state ").concat(state, ")"));
@@ -1424,7 +1389,7 @@ function run() {
                         case hooklib_1.Command.RunContainerStep: return [3 /*break*/, 8];
                     }
                     return [3 /*break*/, 10];
-                case 2: return [4 /*yield*/, (0, hooks_1.prepareJob)(args, responseFile)];
+                case 2: return [4 /*yield*/, (0, hooks_1.prepareJob)(args)];
                 case 3:
                     _b.sent();
                     return [2 /*return*/, process.exit(0)];
@@ -1432,7 +1397,7 @@ function run() {
                 case 5:
                     _b.sent();
                     return [2 /*return*/, process.exit(0)];
-                case 6: return [4 /*yield*/, (0, hooks_1.runScriptStep)(args, state, null)];
+                case 6: return [4 /*yield*/, (0, hooks_1.runScriptStep)(args, state)];
                 case 7:
                     _b.sent();
                     return [2 /*return*/, process.exit(0)];
@@ -3238,11 +3203,17 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getCmdPath = exports.tryGetExecutablePath = exports.isRooted = exports.isDirectory = exports.exists = exports.IS_WINDOWS = exports.unlink = exports.symlink = exports.stat = exports.rmdir = exports.rename = exports.readlink = exports.readdir = exports.mkdir = exports.lstat = exports.copyFile = exports.chmod = void 0;
+exports.getCmdPath = exports.tryGetExecutablePath = exports.isRooted = exports.isDirectory = exports.exists = exports.READONLY = exports.UV_FS_O_EXLOCK = exports.IS_WINDOWS = exports.unlink = exports.symlink = exports.stat = exports.rmdir = exports.rm = exports.rename = exports.readlink = exports.readdir = exports.open = exports.mkdir = exports.lstat = exports.copyFile = exports.chmod = void 0;
 const fs = __importStar(__nccwpck_require__(7147));
 const path = __importStar(__nccwpck_require__(1017));
-_a = fs.promises, exports.chmod = _a.chmod, exports.copyFile = _a.copyFile, exports.lstat = _a.lstat, exports.mkdir = _a.mkdir, exports.readdir = _a.readdir, exports.readlink = _a.readlink, exports.rename = _a.rename, exports.rmdir = _a.rmdir, exports.stat = _a.stat, exports.symlink = _a.symlink, exports.unlink = _a.unlink;
+_a = fs.promises
+// export const {open} = 'fs'
+, exports.chmod = _a.chmod, exports.copyFile = _a.copyFile, exports.lstat = _a.lstat, exports.mkdir = _a.mkdir, exports.open = _a.open, exports.readdir = _a.readdir, exports.readlink = _a.readlink, exports.rename = _a.rename, exports.rm = _a.rm, exports.rmdir = _a.rmdir, exports.stat = _a.stat, exports.symlink = _a.symlink, exports.unlink = _a.unlink;
+// export const {open} = 'fs'
 exports.IS_WINDOWS = process.platform === 'win32';
+// See https://github.com/nodejs/node/blob/d0153aee367422d0858105abec186da4dff0a0c5/deps/uv/include/uv/win.h#L691
+exports.UV_FS_O_EXLOCK = 0x10000000;
+exports.READONLY = fs.constants.O_RDONLY;
 function exists(fsPath) {
     return __awaiter(this, void 0, void 0, function* () {
         try {
@@ -3423,12 +3394,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.findInPath = exports.which = exports.mkdirP = exports.rmRF = exports.mv = exports.cp = void 0;
 const assert_1 = __nccwpck_require__(9491);
-const childProcess = __importStar(__nccwpck_require__(2081));
 const path = __importStar(__nccwpck_require__(1017));
-const util_1 = __nccwpck_require__(3837);
 const ioUtil = __importStar(__nccwpck_require__(1962));
-const exec = util_1.promisify(childProcess.exec);
-const execFile = util_1.promisify(childProcess.execFile);
 /**
  * Copies a file or folder.
  * Based off of shelljs - https://github.com/shelljs/shelljs/blob/9237f66c52e5daa40458f94f9565e18e8132f5a6/src/cp.js
@@ -3509,61 +3476,23 @@ exports.mv = mv;
 function rmRF(inputPath) {
     return __awaiter(this, void 0, void 0, function* () {
         if (ioUtil.IS_WINDOWS) {
-            // Node doesn't provide a delete operation, only an unlink function. This means that if the file is being used by another
-            // program (e.g. antivirus), it won't be deleted. To address this, we shell out the work to rd/del.
             // Check for invalid characters
             // https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file
             if (/[*"<>|]/.test(inputPath)) {
                 throw new Error('File path must not contain `*`, `"`, `<`, `>` or `|` on Windows');
             }
-            try {
-                const cmdPath = ioUtil.getCmdPath();
-                if (yield ioUtil.isDirectory(inputPath, true)) {
-                    yield exec(`${cmdPath} /s /c "rd /s /q "%inputPath%""`, {
-                        env: { inputPath }
-                    });
-                }
-                else {
-                    yield exec(`${cmdPath} /s /c "del /f /a "%inputPath%""`, {
-                        env: { inputPath }
-                    });
-                }
-            }
-            catch (err) {
-                // if you try to delete a file that doesn't exist, desired result is achieved
-                // other errors are valid
-                if (err.code !== 'ENOENT')
-                    throw err;
-            }
-            // Shelling out fails to remove a symlink folder with missing source, this unlink catches that
-            try {
-                yield ioUtil.unlink(inputPath);
-            }
-            catch (err) {
-                // if you try to delete a file that doesn't exist, desired result is achieved
-                // other errors are valid
-                if (err.code !== 'ENOENT')
-                    throw err;
-            }
         }
-        else {
-            let isDir = false;
-            try {
-                isDir = yield ioUtil.isDirectory(inputPath);
-            }
-            catch (err) {
-                // if you try to delete a file that doesn't exist, desired result is achieved
-                // other errors are valid
-                if (err.code !== 'ENOENT')
-                    throw err;
-                return;
-            }
-            if (isDir) {
-                yield execFile(`rm`, [`-rf`, `${inputPath}`]);
-            }
-            else {
-                yield ioUtil.unlink(inputPath);
-            }
+        try {
+            // note if path does not exist, error is silent
+            yield ioUtil.rm(inputPath, {
+                force: true,
+                maxRetries: 3,
+                recursive: true,
+                retryDelay: 300
+            });
+        }
+        catch (err) {
+            throw new Error(`File was unable to be removed ${err}`);
         }
     });
 }
@@ -32757,54 +32686,18 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.requiredPermissions = exports.POD_VOLUME_NAME = void 0;
-exports.createJob = createJob;
-exports.execTaskStep = execTaskStep;
-exports.getPrepareJobTimeoutSeconds = getPrepareJobTimeoutSeconds;
-exports.isTaskContainerAlpine = isTaskContainerAlpine;
+exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.createJob = exports.POD_VOLUME_NAME = void 0;
 var core = __importStar(__nccwpck_require__(2186));
 var arm_appcontainers_1 = __nccwpck_require__(223);
 var identity_1 = __nccwpck_require__(3084);
+var server_1 = __nccwpck_require__(6660);
 var subscriptionId = (_a = process.env.SUBSCRIPTION_ID) !== null && _a !== void 0 ? _a : "00000000-0000-0000-0000-000000000000";
 var acaClient = new arm_appcontainers_1.ContainerAppsAPIClient(new identity_1.DefaultAzureCredential(), subscriptionId);
-var cluster = process.env.ECS_CLUSTER_NAME;
 var DEFAULT_WAIT_FOR_POD_TIME_SECONDS = 10 * 60; // 10 min
 exports.POD_VOLUME_NAME = 'work';
-exports.requiredPermissions = [
-    {
-        group: '',
-        verbs: ['get', 'list', 'create', 'delete'],
-        resource: 'pods',
-        subresource: ''
-    },
-    {
-        group: '',
-        verbs: ['get', 'create'],
-        resource: 'pods',
-        subresource: 'exec'
-    },
-    {
-        group: '',
-        verbs: ['get', 'list', 'watch'],
-        resource: 'pods',
-        subresource: 'log'
-    },
-    {
-        group: 'batch',
-        verbs: ['get', 'list', 'create', 'delete'],
-        resource: 'jobs',
-        subresource: ''
-    },
-    {
-        group: '',
-        verbs: ['create', 'delete', 'get', 'list'],
-        resource: 'secrets',
-        subresource: ''
-    }
-];
-function createJob(jobTaskProperties, services, _registry) {
+function createJob(jobTaskProperties, services) {
     return __awaiter(this, void 0, void 0, function () {
-        var containers, job, execution;
+        var containers, jobEnvelope, job, execution;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -32815,20 +32708,31 @@ function createJob(jobTaskProperties, services, _registry) {
                     if (services === null || services === void 0 ? void 0 : services.length) {
                         containers.push.apply(containers, services);
                     }
-                    return [4 /*yield*/, acaClient.jobs.beginCreateOrUpdateAndWait(process.env.RG_NAME, "job-task-".concat(Date.now()), {
-                            location: 'westeurope',
-                            environmentId: process.env.ACA_ENVIRONMENT_ID,
-                            template: {
-                                containers: containers,
-                                volumes: [
-                                    {
-                                        name: 'work',
-                                        storageName: process.env.STORAGE_NAME,
-                                        storageType: 'AzureFile',
-                                    }
-                                ]
-                            }
-                        })];
+                    jobEnvelope = {
+                        location: 'westeurope',
+                        configuration: {
+                            triggerType: 'Manual',
+                            replicaTimeout: 1800,
+                            replicaRetryLimit: 0,
+                            manualTriggerConfig: {
+                                parallelism: 1,
+                                replicaCompletionCount: 1
+                            },
+                        },
+                        environmentId: process.env.ACA_ENVIRONMENT_ID,
+                        template: {
+                            containers: containers,
+                            volumes: [
+                                {
+                                    name: 'work',
+                                    storageName: process.env.STORAGE_NAME,
+                                    storageType: 'NfsAzureFile',
+                                }
+                            ]
+                        }
+                    };
+                    core.debug(JSON.stringify(jobEnvelope));
+                    return [4 /*yield*/, acaClient.jobs.beginCreateOrUpdateAndWait(process.env.RG_NAME, "job-task-".concat(Date.now()), jobEnvelope)];
                 case 1:
                     job = _a.sent();
                     return [4 /*yield*/, acaClient.jobs.beginStartAndWait(process.env.RG_NAME, job.name)];
@@ -32842,13 +32746,23 @@ function createJob(jobTaskProperties, services, _registry) {
         });
     });
 }
-function execTaskStep(_command, _taskArn, _containerName) {
+exports.createJob = createJob;
+function execTaskStep(command, _taskArn, _containerName) {
     return __awaiter(this, void 0, void 0, function () {
+        var returnCode;
         return __generator(this, function (_a) {
-            throw new Error("exec task step not implemented");
+            switch (_a.label) {
+                case 0:
+                    server_1.LongPollingServer.executeCommand(command.join(" "));
+                    return [4 /*yield*/, server_1.LongPollingServer.waitForJobCompletion()];
+                case 1:
+                    returnCode = _a.sent();
+                    return [2 /*return*/, returnCode == 0];
+            }
         });
     });
 }
+exports.execTaskStep = execTaskStep;
 // export async function waitForJobToComplete(jobName: string): Promise<void> {
 //   const backOffManager = new BackOffManager()
 //   while (true) {
@@ -32916,6 +32830,7 @@ function getPrepareJobTimeoutSeconds() {
     }
     return timeoutSeconds;
 }
+exports.getPrepareJobTimeoutSeconds = getPrepareJobTimeoutSeconds;
 // async function isTaskSucceeded(taskArn: string): Promise<boolean> {
 //   const command = new DescribeTasksCommand({
 //     tasks: [
@@ -32938,11 +32853,12 @@ function isTaskContainerAlpine(taskArn, containerName) {
                     ], taskArn, containerName)];
                 case 1:
                     output = _a.sent();
-                    return [2 /*return*/, output.trim() === '0'];
+                    return [2 /*return*/, output];
             }
         });
     });
 }
+exports.isTaskContainerAlpine = isTaskContainerAlpine;
 var BackOffManager = /** @class */ (function () {
     function BackOffManager(throwAfterSeconds) {
         this.throwAfterSeconds = throwAfterSeconds;
@@ -33038,6 +32954,221 @@ var BackOffManager = /** @class */ (function () {
 //     }
 //   }) || [])
 // }
+
+
+/***/ }),
+
+/***/ 2624:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+var _a;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.RunnerInstanceLabel = exports.JOB_CONTAINER_EXTENSION_NAME = exports.JOB_CONTAINER_NAME = exports.CONTAINER_EXTENSION_PREFIX = exports.STEP_POD_NAME_SUFFIX_LENGTH = exports.MAX_POD_NAME_LENGTH = exports.getSecretName = exports.getVolumeClaimName = exports.getStepPodName = exports.getJobPodName = exports.getRunnerPodName = exports.RUNNER_WORKSPACE = exports.RUNNER_SERVER_PORT = void 0;
+var uuid_1 = __nccwpck_require__(5840);
+exports.RUNNER_SERVER_PORT = (_a = process.env.RUNNER_SERVER_PORT) !== null && _a !== void 0 ? _a : '5000';
+exports.RUNNER_WORKSPACE = process.env['RUNNER_WORKSPACE'];
+function getRunnerPodName() {
+    var name = process.env.ACTIONS_RUNNER_POD_NAME;
+    if (!name) {
+        throw new Error("'ACTIONS_RUNNER_POD_NAME' env is required, please contact your self hosted runner administrator");
+    }
+    return name;
+}
+exports.getRunnerPodName = getRunnerPodName;
+function getJobPodName() {
+    return "".concat(getRunnerPodName().substring(0, exports.MAX_POD_NAME_LENGTH - '-workflow'.length), "-workflow");
+}
+exports.getJobPodName = getJobPodName;
+function getStepPodName() {
+    return "".concat(getRunnerPodName().substring(0, exports.MAX_POD_NAME_LENGTH - ('-step-'.length + exports.STEP_POD_NAME_SUFFIX_LENGTH)), "-step-").concat((0, uuid_1.v4)().substring(0, exports.STEP_POD_NAME_SUFFIX_LENGTH));
+}
+exports.getStepPodName = getStepPodName;
+function getVolumeClaimName() {
+    var name = process.env.ACTIONS_RUNNER_CLAIM_NAME;
+    if (!name) {
+        return "".concat(getRunnerPodName(), "-work");
+    }
+    return name;
+}
+exports.getVolumeClaimName = getVolumeClaimName;
+function getSecretName() {
+    return "".concat(getRunnerPodName().substring(0, exports.MAX_POD_NAME_LENGTH - ('-secret-'.length + exports.STEP_POD_NAME_SUFFIX_LENGTH)), "-secret-").concat((0, uuid_1.v4)().substring(0, exports.STEP_POD_NAME_SUFFIX_LENGTH));
+}
+exports.getSecretName = getSecretName;
+exports.MAX_POD_NAME_LENGTH = 63;
+exports.STEP_POD_NAME_SUFFIX_LENGTH = 8;
+exports.CONTAINER_EXTENSION_PREFIX = '$';
+exports.JOB_CONTAINER_NAME = 'job';
+exports.JOB_CONTAINER_EXTENSION_NAME = '$job';
+var RunnerInstanceLabel = /** @class */ (function () {
+    function RunnerInstanceLabel() {
+        this.podName = getRunnerPodName();
+    }
+    Object.defineProperty(RunnerInstanceLabel.prototype, "key", {
+        get: function () {
+            return 'runner-pod';
+        },
+        enumerable: false,
+        configurable: true
+    });
+    Object.defineProperty(RunnerInstanceLabel.prototype, "value", {
+        get: function () {
+            return this.podName;
+        },
+        enumerable: false,
+        configurable: true
+    });
+    RunnerInstanceLabel.prototype.toString = function () {
+        return "runner-pod=".concat(this.podName);
+    };
+    return RunnerInstanceLabel;
+}());
+exports.RunnerInstanceLabel = RunnerInstanceLabel;
+
+
+/***/ }),
+
+/***/ 6660:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __generator = (this && this.__generator) || function (thisArg, body) {
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
+    return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    function verb(n) { return function (v) { return step([n, v]); }; }
+    function step(op) {
+        if (f) throw new TypeError("Generator is already executing.");
+        while (g && (g = 0, op[0] && (_ = 0)), _) try {
+            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+            if (y = 0, t) op = [op[0] & 2, t.value];
+            switch (op[0]) {
+                case 0: case 1: t = op; break;
+                case 4: _.label++; return { value: op[1], done: false };
+                case 5: _.label++; y = op[1]; op = [0]; continue;
+                case 7: op = _.ops.pop(); _.trys.pop(); continue;
+                default:
+                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+                    if (t[2]) _.ops.pop();
+                    _.trys.pop(); continue;
+            }
+            op = body.call(thisArg, _);
+        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+    }
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.LongPollingServer = void 0;
+var crypto_1 = __nccwpck_require__(6113);
+var http_1 = __nccwpck_require__(3685);
+var url_1 = __nccwpck_require__(7310);
+var constants_1 = __nccwpck_require__(2624);
+var LongPollingServer = /** @class */ (function () {
+    function LongPollingServer() {
+        this.port = constants_1.RUNNER_SERVER_PORT;
+        (0, http_1.createServer)(this.handler).listen(this.port);
+        console.log("Server running on port ".concat(this.port));
+    }
+    LongPollingServer.waitForSubscriber = function () {
+        return __awaiter(this, void 0, void 0, function () {
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        if (!!LongPollingServer.subscriber) return [3 /*break*/, 2];
+                        return [4 /*yield*/, new Promise(function (resolve) { return setTimeout(resolve, 500); })];
+                    case 1:
+                        _a.sent();
+                        return [3 /*break*/, 0];
+                    case 2: return [2 /*return*/];
+                }
+            });
+        });
+    };
+    LongPollingServer.waitForJobCompletion = function () {
+        return __awaiter(this, void 0, void 0, function () {
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        if (!(LongPollingServer.jobReturnCode == -1)) return [3 /*break*/, 2];
+                        return [4 /*yield*/, new Promise(function (resolve) { return setTimeout(resolve, 500); })];
+                    case 1:
+                        _a.sent();
+                        return [3 /*break*/, 0];
+                    case 2: return [2 /*return*/, LongPollingServer.jobReturnCode];
+                }
+            });
+        });
+    };
+    LongPollingServer.startServer = function () {
+        !this.serverStarted && new LongPollingServer();
+        this.serverStarted = true;
+    };
+    LongPollingServer.executeCommand = function (command) {
+        var _a;
+        return __awaiter(this, void 0, void 0, function () {
+            return __generator(this, function (_b) {
+                console.debug("executing command ".concat(command));
+                (_a = LongPollingServer.subscriber) === null || _a === void 0 ? void 0 : _a.end(command);
+                return [2 /*return*/];
+            });
+        });
+    };
+    LongPollingServer.prototype.handler = function (req, res) {
+        var parsedUrl = (0, url_1.parse)(req.url, true);
+        // A new client would like to subscribe.
+        if (parsedUrl.pathname === '/poll') {
+            var id = (0, crypto_1.randomUUID)();
+            res.setHeader('Content-Type', 'text/plain;charset=utf-8');
+            res.setHeader("Cache-Control", "no-cache, must-revalidate");
+            LongPollingServer.subscriber = res;
+            req.on('close', function () { return LongPollingServer.subscriber = undefined; });
+            return;
+        }
+        else if (parsedUrl.pathname === '/logs' && req.method === 'POST') {
+            var logs_1 = '';
+            req
+                .on('data', function (chunk) {
+                logs_1 += chunk;
+            })
+                .on('end', function () {
+                console.log(logs_1);
+                res.end('ok');
+            });
+        }
+        else if (parsedUrl.pathname === '/done' && req.method === 'POST') {
+            var data_1 = '';
+            req
+                .on('data', function (chunk) {
+                data_1 += chunk;
+            })
+                .on('end', function () {
+                var _a;
+                var payload = JSON.parse(data_1);
+                console.error(payload.errorLogs);
+                LongPollingServer.jobReturnCode = (_a = payload.returnCode) !== null && _a !== void 0 ? _a : 0;
+                res.end('ok');
+            });
+        }
+    };
+    LongPollingServer.serverStarted = false;
+    LongPollingServer.jobReturnCode = -1;
+    return LongPollingServer;
+}());
+exports.LongPollingServer = LongPollingServer;
 
 
 /***/ }),

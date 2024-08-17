@@ -1,8 +1,5 @@
 name: PostgreSQL service example
 on: 
-  push:
-    branches:
-      - runner_hooks
   workflow_dispatch:
     inputs:
       runner:

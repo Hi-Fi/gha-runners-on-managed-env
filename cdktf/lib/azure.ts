@@ -4,7 +4,6 @@ import { Resource } from '../.gen/providers/azapi/resource'
 import { Fn, TerraformLocal, TerraformStack, TerraformVariable } from "cdktf";
 import { Construct } from "constructs";
 import { ResourceGroup } from "@cdktf/provider-azurerm/lib/resource-group";
-import { ContainerAppEnvironment } from "@cdktf/provider-azurerm/lib/container-app-environment";
 import { ContainerRegistry } from "@cdktf/provider-azurerm/lib/container-registry";
 import { UserAssignedIdentity } from "@cdktf/provider-azurerm/lib/user-assigned-identity";
 import { RoleAssignment } from "@cdktf/provider-azurerm/lib/role-assignment";
@@ -13,9 +12,6 @@ import { RoleDefinition } from "@cdktf/provider-azurerm/lib/role-definition";
 import { DataAzurermSubscription } from "@cdktf/provider-azurerm/lib/data-azurerm-subscription";
 import { ContainerApp } from "@cdktf/provider-azurerm/lib/container-app";
 import { commonVariables } from "./variables";
-import { StorageAccount } from "@cdktf/provider-azurerm/lib/storage-account";
-import { StorageShare } from "@cdktf/provider-azurerm/lib/storage-share";
-import { ContainerAppEnvironmentStorage } from "@cdktf/provider-azurerm/lib/container-app-environment-storage";
 
 export class Azure extends TerraformStack {
     constructor(scope: Construct, id: string) {
@@ -31,6 +27,12 @@ export class Azure extends TerraformStack {
         const sub = new DataAzurermSubscription(this, 'sub', {});
 
         const { pat, githubConfigUrl } = commonVariables(this);
+
+        const subnetId = new TerraformVariable(this, 'subnetId', {
+            description: 'Azure subnet resource ID that has assigned for microsoft.app/managedEnvironment',
+            nullable: false,
+            sensitive: true
+        });
 
         const location = new TerraformVariable(this, 'location', {
             default: 'westeurope',
@@ -78,11 +80,11 @@ export class Azure extends TerraformStack {
         const runnerCache = new Resource(this, 'runnerCache', {
             type: 'Microsoft.ContainerRegistry/registries/cacheRules@2023-01-01-preview',
             parentId: acr.id,
-            name: 'runner-cache',
+            name: 'root-runner-cache',
             body: {
                 properties: {
-                    sourceRepository: 'ghcr.io/hi-fi/actions-runner',
-                    targetRepository: 'actions-runner'
+                    sourceRepository: 'ghcr.io/hi-fi/root-actions-runner',
+                    targetRepository: 'root-actions-runner'
                 }
             }
         })
@@ -127,27 +129,20 @@ export class Azure extends TerraformStack {
             }
         })
 
-        const storageAccount = new StorageAccount(this, 'storageAccount', {
-            accountReplicationType: 'LRS',
-            accountTier: 'Standard',
+        const storageAccount = new Resource(this, 'storageAccount', {
+            type: 'Microsoft.Storage/storageAccounts@2023-01-01',
+            parentId: rg.id,
             location,
             name: 'ghaexamplestorageaccount',
-            resourceGroupName: rg.name,
-            largeFileShareEnabled: true,
-        })
-
-        const storageShare = new StorageShare(this, 'storageShare', {
-            name: 'ghaexampleshare',
-            quota: 1024,
-            storageAccountName: storageAccount.name,
-            enabledProtocol: 'SMB'
-        })
-
-        const environment = new ContainerAppEnvironment(this, 'acaenv', {
-            location,
-            name: 'gha-runner-job-environment',
-            resourceGroupName: rg.name,
-            logAnalyticsWorkspaceId: log.id,
+            body: {
+                properties: {
+                    largeFileSharesState: 'Enabled'
+                },
+                sku: {
+                    name: 'Premium_LRS'
+                },
+                kind: 'FileStorage',
+            },
             lifecycle: {
                 ignoreChanges: [
                     'tags'
@@ -155,14 +150,79 @@ export class Azure extends TerraformStack {
             }
         });
 
-        const acaEnvStorage = new ContainerAppEnvironmentStorage(this, 'acaenvstorage', {
-            accessKey: storageAccount.primaryAccessKey,
-            accessMode: 'ReadWrite',
-            accountName: storageAccount.name,
-            containerAppEnvironmentId: environment.id,
-            name: 'gharunnerjobstorage',
-            shareName: storageShare.name,
+        const fileServices = new Resource(this, 'fileServices', {
+            type: 'Microsoft.Storage/storageAccounts/fileServices@2023-01-01',
+            name: 'default',
+            parentId: storageAccount.id,
+            body: {
+                properties: {
+
+                }
+            }
         })
+
+        fileServices.importFrom(`${storageAccount.id}/fileServices/default`);
+
+        const storageShare = new Resource(this, 'storageShare', {
+            type: 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-01-01',
+            name: 'ghaexampleshare',
+            parentId: fileServices.id,
+            body: {
+                properties: {
+                    enabledProtocols: 'NFS',
+                    shareQuota: 1024,
+                }
+            },
+        });
+
+        const environment = new Resource(this, 'acaenv', {
+            type: 'Microsoft.App/managedEnvironments@2024-03-01',
+            parentId: rg.id,
+            location,
+            name: 'gha-runner-environment',
+            body: {
+                properties: {
+                    appLogsConfiguration: {
+                        destination: 'log-analytics',
+                        logAnalyticsConfiguration: {
+                            customerId: log.workspaceId,
+                            sharedKey: log.primarySharedKey,
+                        }
+                    },
+                    infrastructureResourceGroup: 'managed-aca-rg',
+                    vnetConfiguration: {
+                        infrastructureSubnetId: subnetId.value,
+                        internal: true
+                    },
+                    workloadProfiles: [
+                        {
+                            name: 'Consumption',
+                            workloadProfileType: 'Consumption'
+                        }
+                    ]
+                }
+            },
+            lifecycle: {
+                ignoreChanges: [
+                    'tags'
+                ]
+            }
+        });
+
+        const acaEnvStorage = new Resource(this, 'acaenvstorage', {
+            type: 'Microsoft.App/managedEnvironments/storages@2024-02-02-preview',
+            name: 'gharunnerjobstorage',
+            parentId: environment.id,
+            body: {
+                properties: {
+                    nfsAzureFile: {
+                        accessMode: 'ReadWrite',
+                        server: `${storageAccount.name}.file.core.windows.net`,
+                        shareName: `/${storageAccount.name}/${storageShare.name}`
+                    }
+                }
+            }
+        }) 
 
         // Have to use Terraform local variable as trying to use jsonencode directly would fail.
         const dockerConfig = new TerraformLocal(this, 'dockerConfig', {
@@ -352,7 +412,7 @@ export class Azure extends TerraformStack {
                                 ],
                                 command: ['/bin/sh', '-c', 'export EXECID=$(cat /proc/sys/kernel/random/uuid) && mkdir -p /tmp/_work/$EXECID && ln -s /tmp/_work/$EXECID _work && /home/runner/run.sh ; rm -r /tmp/_work/$EXECID'],
                                 // Have to use custom image as we want to run service as root to be able to install packages
-                                image: `${acr.loginServer}/actions-runner:aca`,
+                                image: `${acr.loginServer}/root-actions-runner:latest`,
                                 name: 'main',
                                 resources: {
                                     cpu: 1,
@@ -370,7 +430,7 @@ export class Azure extends TerraformStack {
                             {
                                 name: runnerVolumeName,
                                 storageName: acaEnvStorage.name,
-                                storageType: 'AzureFile'
+                                storageType: 'NfsAzureFile'
                             }
                         ]
                     }
@@ -455,7 +515,8 @@ export class Azure extends TerraformStack {
             ],
             lifecycle: {
                 ignoreChanges: [
-                    'tags'
+                    'tags',
+                    'workload_profile_name'
                 ]
             }
         });
@@ -464,7 +525,7 @@ export class Azure extends TerraformStack {
          * @see https://github.com/microsoft/azure-container-apps/issues/1024
          */
         const role = new RoleDefinition(this, 'jobRole', {
-            name: 'gha-example-job-start-role',
+            name: `${sub.subscriptionId}-gha-example-job-start-role`,
             scope: sub.id,
             permissions: [
                 {
@@ -473,6 +534,23 @@ export class Azure extends TerraformStack {
                         'microsoft.app/jobs/stop/action',
                         'microsoft.app/jobs/read',
                         'microsoft.app/jobs/executions/read',
+                    ],
+                }
+            ]
+        })
+
+        const jobCreationRole = new RoleDefinition(this, 'jobCreationRole', {
+            name: `${sub.subscriptionId}-gha-example-job-create-role`,
+            scope: sub.id,
+            permissions: [
+                {
+                    actions: [
+                        'microsoft.app/jobs/start/action',
+                        'microsoft.app/jobs/stop/action',
+                        'microsoft.app/jobs/read',
+                        'microsoft.app/jobs/write',
+                        'microsoft.app/jobs/executions/read',
+                        'microsoft.App/managedEnvironments/join/action'
                     ],
                 }
             ]
@@ -491,6 +569,13 @@ export class Azure extends TerraformStack {
             scope: kanikoJob.id,
             roleDefinitionId: role.roleDefinitionResourceId
         });
+
+        // Allow runner to start the job. As each one created new job, have to give to RG level.
+        new RoleAssignment(this, 'actionContainerStartRoleAssignment', {
+            principalId: identity.principalId,
+            scope: rg.id,
+            roleDefinitionId: jobCreationRole.roleDefinitionResourceId
+        })
 
         new RoleAssignment(this, 'imagePushRoleAssignment', {
             principalId: identity.principalId,
