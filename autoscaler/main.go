@@ -41,7 +41,7 @@ func main() {
 	acaClient, acaErr := azure.GetClient(ctx, logger)
 	if handler == nil && acaClient != nil {
 		logger.Info("Using Azure Container Apps for runners")
-		handler = ecsClient
+		handler = acaClient
 	}
 	crClient, crErr := gcp.GetClient(ctx, logger)
 	if handler == nil && crClient != nil {
@@ -65,6 +65,9 @@ func main() {
 		scaleSet = client.CreateRunnerScaleSet(scaleSetName)
 		logger.Info(fmt.Sprintf("Created scale set %s (ID %x). Runner group id %x", scaleSet.Name, scaleSet.Id, scaleSet.RunnerGroupId))
 	}
+
+	logger.Info(client.Client.ActionsServiceAdminToken)
+	logger.Info(client.Client.ActionsServiceURL)
 
 	if err == nil {
 		client.StartMessagePolling(scaleSet.Id, handler)

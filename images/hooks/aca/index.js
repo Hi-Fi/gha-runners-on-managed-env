@@ -407,6 +407,7 @@ function containerVolumes(userMountVolumes, jobContainer, containerAction) {
         {
             volumeName: index_1.POD_VOLUME_NAME,
             mountPath: '/__w',
+            subPath: executionId
         }
     ];
     var workspacePath = process.env.GITHUB_WORKSPACE;
@@ -880,7 +881,7 @@ var constants_1 = __nccwpck_require__(4865);
 function prepareJob(args) {
     var _a, _b, _c, _d, _e, _f;
     return __awaiter(this, void 0, void 0, function () {
-        var extarnalsCopy, containerDefinition, services, createdJob, err_1, message, isAlpine, err_2, message;
+        var containerDefinition, services, createdJob, err_1, message, isAlpine, err_2, message;
         return __generator(this, function (_g) {
             switch (_g.label) {
                 case 0:
@@ -889,7 +890,9 @@ function prepareJob(args) {
                     }
                     //await prunePods()
                     core.debug("copying externals");
-                    extarnalsCopy = copyExternalsToRoot();
+                    return [4 /*yield*/, copyExternalsToRoot()];
+                case 1:
+                    _g.sent();
                     core.info("Creating container definitions");
                     containerDefinition = undefined;
                     if ((_a = args.container) === null || _a === void 0 ? void 0 : _a.image) {
@@ -908,44 +911,39 @@ function prepareJob(args) {
                     }
                     core.info("Creating task including containers");
                     createdJob = undefined;
-                    _g.label = 1;
-                case 1:
-                    _g.trys.push([1, 3, , 4]);
-                    return [4 /*yield*/, (0, aca_1.createJob)(containerDefinition, services)];
+                    _g.label = 2;
                 case 2:
-                    createdJob = _g.sent();
-                    return [3 /*break*/, 4];
+                    _g.trys.push([2, 4, , 5]);
+                    return [4 /*yield*/, (0, aca_1.createJob)(containerDefinition, services)];
                 case 3:
+                    createdJob = _g.sent();
+                    return [3 /*break*/, 5];
+                case 4:
                     err_1 = _g.sent();
                     core.debug("createTask failed: ".concat(JSON.stringify(err_1)));
                     message = ((_d = (_c = err_1 === null || err_1 === void 0 ? void 0 : err_1.response) === null || _c === void 0 ? void 0 : _c.body) === null || _d === void 0 ? void 0 : _d.message) || err_1;
                     throw new Error("failed to create job task: ".concat(message));
-                case 4:
+                case 5:
                     if (!(createdJob === null || createdJob === void 0 ? void 0 : createdJob.id)) {
                         throw new Error('created task should have ID');
                     }
                     core.debug("Job task created, waiting for it to come online ".concat(createdJob.id));
                     core.debug('Job task is ready for traffic');
                     isAlpine = false;
-                    _g.label = 5;
-                case 5:
-                    _g.trys.push([5, 7, , 8]);
-                    return [4 /*yield*/, (0, aca_1.isTaskContainerAlpine)(createdJob.id, constants_1.JOB_CONTAINER_NAME)];
+                    _g.label = 6;
                 case 6:
-                    isAlpine = _g.sent();
-                    return [3 /*break*/, 8];
+                    _g.trys.push([6, 8, , 9]);
+                    return [4 /*yield*/, (0, aca_1.isTaskContainerAlpine)(createdJob.id, constants_1.JOB_CONTAINER_NAME)];
                 case 7:
+                    isAlpine = _g.sent();
+                    return [3 /*break*/, 9];
+                case 8:
                     err_2 = _g.sent();
                     core.debug("Failed to determine if the task is alpine: ".concat(JSON.stringify(err_2)));
                     message = ((_f = (_e = err_2 === null || err_2 === void 0 ? void 0 : err_2.response) === null || _e === void 0 ? void 0 : _e.body) === null || _f === void 0 ? void 0 : _f.message) || err_2;
                     throw new Error("failed to determine if the task is alpine: ".concat(message));
-                case 8:
-                    core.debug("Setting isAlpine to ".concat(isAlpine));
-                    // generateResponseFile(responseFile, createdJob, isAlpine)
-                    return [4 /*yield*/, extarnalsCopy];
                 case 9:
-                    // generateResponseFile(responseFile, createdJob, isAlpine)
-                    _g.sent();
+                    core.debug("Setting isAlpine to ".concat(isAlpine));
                     return [2 /*return*/];
             }
         });
@@ -993,7 +991,7 @@ function createContainerDefinition(container, name, jobContainer) {
         }), true), [
             {
                 name: 'RUNNER_HOST',
-                value: (0, utils_1.getIpAddress)()[0]
+                value: process.env.CONTAINER_APP_HOSTNAME
             },
             {
                 name: 'RUNNER_PORT',

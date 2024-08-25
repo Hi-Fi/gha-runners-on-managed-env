@@ -222,7 +222,7 @@ export class Azure extends TerraformStack {
                     }
                 }
             }
-        }) 
+        })
 
         // Have to use Terraform local variable as trying to use jsonencode directly would fail.
         const dockerConfig = new TerraformLocal(this, 'dockerConfig', {
@@ -331,14 +331,8 @@ export class Azure extends TerraformStack {
 
         const runnerVolumeName = 'work'
 
-        /**
-         * @see https://learn.microsoft.com/en-us/azure/templates/microsoft.app/jobs?pivots=deployment-language-terraform
-         */
-        const ghaJob = new Resource(this, 'ghaJob', {
-            type: 'Microsoft.App/jobs@2023-05-01',
-            name: 'gha-runner-job-01',
-            parentId: rg.id,
-            location,
+        const ghaRunnerApp = new Resource(this, 'ghaRunnerApp', {
+            type: 'Microsoft.App/containerApps@2024-02-02-preview',
             identity: [
                 {
                     type: 'UserAssigned',
@@ -347,12 +341,18 @@ export class Azure extends TerraformStack {
                     ]
                 }
             ],
+            name: 'gha-runner-app-01',
+            parentId: rg.id,
+            location,
             body: {
+
                 properties: {
                     configuration: {
-                        manualTriggerConfig: {
-                            parallelism: 1,
-                            replicaCompletionCount: 1
+                        activeRevisionsMode: 'Multiple',
+                        ingress: {
+                            external: false,
+                            targetPort: 5000,
+                            allowInsecure: true
                         },
                         registries: [
                             {
@@ -360,19 +360,30 @@ export class Azure extends TerraformStack {
                                 server: acr.loginServer
                             }
                         ],
-                        triggerType: 'Manual',
-                        secrets: [
-                            {
-                                name: 'github-pat',
-                                value: pat.value
-                            }
-                        ],
-                        replicaTimeout: 1200
                     },
                     environmentId: environment.id,
                     template: {
+                        // This is just placeholder, so no need to scale any replicas.
+                        scale: {
+                            maxReplicas: 1,
+                            minReplicas: 0
+                        },
                         containers: [
                             {
+                                resources: {
+                                    cpu: 1,
+                                    memory: '2Gi',
+                                },
+                                // Have to use custom image as we want to run service as root to be able to install packages
+                                image: `${acr.loginServer}/root-actions-runner:latest`,
+                                name: 'main',
+                                command: ['/bin/sh', '-c', 'export EXECID=$(cat /proc/sys/kernel/random/uuid) && mkdir -p /tmp/_work/$EXECID && ln -s /tmp/_work/$EXECID _work && /home/runner/run.sh ; rm -r /tmp/_work/$EXECID'],
+                                volumeMounts: [
+                                    {
+                                        mountPath: '/tmp/_work',
+                                        volumeName: runnerVolumeName,
+                                    }
+                                ],
                                 env: [
                                     // https://github.com/microsoft/azure-container-apps/issues/502#issuecomment-1340225438
                                     {
@@ -410,21 +421,7 @@ export class Azure extends TerraformStack {
                                         value: environment.id
                                     }
                                 ],
-                                command: ['/bin/sh', '-c', 'export EXECID=$(cat /proc/sys/kernel/random/uuid) && mkdir -p /tmp/_work/$EXECID && ln -s /tmp/_work/$EXECID _work && /home/runner/run.sh ; rm -r /tmp/_work/$EXECID'],
-                                // Have to use custom image as we want to run service as root to be able to install packages
-                                image: `${acr.loginServer}/root-actions-runner:latest`,
-                                name: 'main',
-                                resources: {
-                                    cpu: 1,
-                                    memory: '2Gi'
-                                },
-                                volumeMounts: [
-                                    {
-                                        mountPath: '/tmp/_work',
-                                        volumeName: runnerVolumeName,
-                                    }
-                                ]
-                            }
+                            },
                         ],
                         volumes: [
                             {
@@ -475,7 +472,7 @@ export class Azure extends TerraformStack {
                         // CPU and Memory can be lower with workload profile
                         cpu: 0.25,
                         memory: '0.5Gi',
-                        image: `${acr.loginServer}/autoscaler:azure`,
+                        image: `${acr.loginServer}/autoscaler:test`,
                         name: 'autoscaler',
                         env: [
                             {
@@ -499,8 +496,8 @@ export class Azure extends TerraformStack {
                                 value: rg.name
                             },
                             {
-                                name: 'JOB_NAME',
-                                value: ghaJob.name
+                                name: 'APP_NAME',
+                                value: ghaRunnerApp.name
                             },
                             {
                                 name: 'SCALE_SET_NAME',
@@ -525,11 +522,12 @@ export class Azure extends TerraformStack {
          * @see https://github.com/microsoft/azure-container-apps/issues/1024
          */
         const role = new RoleDefinition(this, 'jobRole', {
-            name: `${sub.subscriptionId}-gha-example-job-start-role`,
+            name: `${sub.subscriptionId}-gha-example-revision-start-role`,
             scope: sub.id,
             permissions: [
                 {
                     actions: [
+                        'microsoft.app/containerApps/*',
                         'microsoft.app/jobs/start/action',
                         'microsoft.app/jobs/stop/action',
                         'microsoft.app/jobs/read',
@@ -540,7 +538,7 @@ export class Azure extends TerraformStack {
         })
 
         const jobCreationRole = new RoleDefinition(this, 'jobCreationRole', {
-            name: `${sub.subscriptionId}-gha-example-job-create-role`,
+            name: `${sub.subscriptionId}-gha-example-revision-create-role`,
             scope: sub.id,
             permissions: [
                 {
@@ -556,10 +554,10 @@ export class Azure extends TerraformStack {
             ]
         })
 
-        // Allow autoscaler to start the job
+        // Allow autoscaler to create new revision of app
         new RoleAssignment(this, 'scaleJobRoleAssignment', {
             principalId: autoscalerApp.identity.principalId,
-            scope: ghaJob.id,
+            scope: ghaRunnerApp.id,
             roleDefinitionId: role.roleDefinitionResourceId
         })
 

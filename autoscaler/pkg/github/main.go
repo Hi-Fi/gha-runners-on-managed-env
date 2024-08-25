@@ -74,7 +74,8 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 		asc.logger.Error("Could not get session", slog.Any("err", err))
 		return err
 	}
-
+	asc.logger.Info(session.MessageQueueUrl)
+	asc.logger.Info(session.MessageQueueAccessToken)
 	defer asc.Client.DeleteMessageSession(context.Background(), runnerScaleSetId, session.SessionId)
 
 	var lastMessageId int64 = 0
@@ -92,6 +93,7 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 			}
 			if message.MessageType != "RunnerScaleSetJobMessages" {
 				asc.logger.Debug(fmt.Sprintf("Skipping message of type %s\n", message.MessageType))
+				asc.logger.Info(message.Body)
 				lastMessageId = message.MessageId
 				continue
 			}

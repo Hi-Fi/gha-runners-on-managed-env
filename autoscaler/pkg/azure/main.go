@@ -15,15 +15,15 @@ import (
 type Aca struct {
 	ctx               context.Context
 	logger            *slog.Logger
-	client            *armappcontainers.JobsClient
+	client            *armappcontainers.ContainerAppsClient
 	resourceGroupName string
-	jobName           string
+	appName           string
 }
 
 func GetClient(ctx context.Context, logger *slog.Logger) (*Aca, error) {
 	subscriptionId, err1 := requireEnv("SUBSCRIPTION_ID")
 	resourceGroupName, err2 := requireEnv("RESOURCE_GROUP_NAME")
-	jobName, err3 := requireEnv("JOB_NAME")
+	appName, err3 := requireEnv("APP_NAME")
 
 	if errors.Join(err1, err2, err3) != nil {
 		return nil, errors.Join(err1, err2, err3)
@@ -32,7 +32,7 @@ func GetClient(ctx context.Context, logger *slog.Logger) (*Aca, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := armappcontainers.NewJobsClient(subscriptionId, cred, nil)
+	client, err := armappcontainers.NewContainerAppsClient(subscriptionId, cred, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func GetClient(ctx context.Context, logger *slog.Logger) (*Aca, error) {
 		logger:            logger,
 		client:            client,
 		resourceGroupName: resourceGroupName,
-		jobName:           jobName,
+		appName:           appName,
 	}, nil
 }
 
@@ -51,33 +51,49 @@ func (a *Aca) CurrentRunnerCount() (int, error) {
 }
 
 func (a *Aca) TriggerNewRunners(count int, jitConfig string) (err error) {
-	jobDefinition, err := a.client.Get(a.ctx, a.resourceGroupName, a.jobName, nil)
+	appDefinition, err := a.client.Get(a.ctx, a.resourceGroupName, a.appName, nil)
 	if err != nil {
 		return err
 	}
 	// Append JIT key to environment variables
-	container := jobDefinition.Properties.Template.Containers[0]
+	container := appDefinition.Properties.Template.Containers[0]
 
-	_, err = a.client.BeginStart(a.ctx, a.resourceGroupName, a.jobName, &armappcontainers.JobsClientBeginStartOptions{
-		Template: &armappcontainers.JobExecutionTemplate{
-			Containers: []*armappcontainers.JobExecutionContainer{
-				{
-					Name:      container.Name,
-					Image:     container.Image,
-					Resources: container.Resources,
-					Command:   container.Command,
-					Args:      container.Args,
-					Env: append(
-						jobDefinition.Properties.Template.Containers[0].Env,
-						&armappcontainers.EnvironmentVar{
-							Name:  to.Ptr("ACTIONS_RUNNER_INPUT_JITCONFIG"),
-							Value: &jitConfig,
-						},
-					),
+	env := []*armappcontainers.EnvironmentVar{}
+
+	for _, envVar := range container.Env {
+		if *envVar.Name != "ACTIONS_RUNNER_INPUT_JITCONFIG" {
+			env = append(env, envVar)
+		}
+	}
+
+	_, err = a.client.BeginUpdate(a.ctx, a.resourceGroupName, a.appName, armappcontainers.ContainerApp{
+		Location: appDefinition.Location,
+		Properties: &armappcontainers.ContainerAppProperties{
+			EnvironmentID: appDefinition.Properties.EnvironmentID,
+			Template: &armappcontainers.Template{
+				Containers: []*armappcontainers.Container{
+					{
+						Name:      container.Name,
+						Image:     container.Image,
+						Resources: container.Resources,
+						Command:   container.Command,
+						Args:      container.Args,
+						Env: append(
+							env,
+							&armappcontainers.EnvironmentVar{
+								Name:  to.Ptr("ACTIONS_RUNNER_INPUT_JITCONFIG"),
+								Value: &jitConfig,
+							},
+						),
+					},
+				},
+				Scale: &armappcontainers.Scale{
+					MaxReplicas: to.Ptr(int32(1)),
+					MinReplicas: to.Ptr(int32(1)),
 				},
 			},
 		},
-	})
+	}, &armappcontainers.ContainerAppsClientBeginUpdateOptions{})
 
 	return err
 }
