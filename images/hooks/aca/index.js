@@ -107,7 +107,7 @@ function createJob(jobTaskProperties, services) {
                                 {
                                     name: 'work',
                                     storageName: process.env.STORAGE_NAME,
-                                    storageType: 'NfsAzureFile',
+                                    storageType: 'AzureFile',
                                 }
                             ]
                         }
@@ -32724,7 +32724,7 @@ function createJob(jobTaskProperties, services) {
                                 {
                                     name: 'work',
                                     storageName: process.env.STORAGE_NAME,
-                                    storageType: 'NfsAzureFile',
+                                    storageType: 'AzureFile',
                                 }
                             ]
                         }

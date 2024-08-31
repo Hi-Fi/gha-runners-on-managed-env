@@ -85,6 +85,7 @@ func (a *Aca) TriggerNewRunners(count int, jitConfig string) (err error) {
 								Value: &jitConfig,
 							},
 						),
+						VolumeMounts: container.VolumeMounts,
 					},
 				},
 				Scale: &armappcontainers.Scale{

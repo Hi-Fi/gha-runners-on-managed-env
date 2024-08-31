@@ -12,13 +12,18 @@ import { RoleDefinition } from "@cdktf/provider-azurerm/lib/role-definition";
 import { DataAzurermSubscription } from "@cdktf/provider-azurerm/lib/data-azurerm-subscription";
 import { ContainerApp } from "@cdktf/provider-azurerm/lib/container-app";
 import { commonVariables } from "./variables";
+import { StorageAccount } from "@cdktf/provider-azurerm/lib/storage-account";
+import { StorageShare } from "@cdktf/provider-azurerm/lib/storage-share";
+import { ContainerAppEnvironmentStorage } from "@cdktf/provider-azurerm/lib/container-app-environment-storage";
 
 export class Azure extends TerraformStack {
     constructor(scope: Construct, id: string) {
         super(scope, id);
 
         new AzurermProvider(this, 'azurerm', {
-            features: {}
+            features: [
+                {}
+            ]
         })
 
         new AzapiProvider(this, 'azapi', {
@@ -129,51 +134,26 @@ export class Azure extends TerraformStack {
             }
         })
 
-        const storageAccount = new Resource(this, 'storageAccount', {
-            type: 'Microsoft.Storage/storageAccounts@2023-01-01',
-            parentId: rg.id,
+        const storageAccount = new StorageAccount(this, 'storageAccount', {
+            accountReplicationType: 'LRS',
+            accountTier: 'Standard',
             location,
             name: 'ghaexamplestorageaccount',
-            body: {
-                properties: {
-                    largeFileSharesState: 'Enabled'
-                },
-                sku: {
-                    name: 'Premium_LRS'
-                },
-                kind: 'FileStorage',
-            },
+            resourceGroupName: rg.name,
+            largeFileShareEnabled: true,
             lifecycle: {
                 ignoreChanges: [
                     'tags'
                 ]
             }
-        });
-
-        const fileServices = new Resource(this, 'fileServices', {
-            type: 'Microsoft.Storage/storageAccounts/fileServices@2023-01-01',
-            name: 'default',
-            parentId: storageAccount.id,
-            body: {
-                properties: {
-
-                }
-            }
         })
 
-        fileServices.importFrom(`${storageAccount.id}/fileServices/default`);
-
-        const storageShare = new Resource(this, 'storageShare', {
-            type: 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-01-01',
+        const storageShare = new StorageShare(this, 'storageShare', {
             name: 'ghaexampleshare',
-            parentId: fileServices.id,
-            body: {
-                properties: {
-                    enabledProtocols: 'NFS',
-                    shareQuota: 1024,
-                }
-            },
-        });
+            quota: 1024,
+            storageAccountName: storageAccount.name,
+            enabledProtocol: 'SMB'
+        })
 
         const environment = new Resource(this, 'acaenv', {
             type: 'Microsoft.App/managedEnvironments@2024-03-01',
@@ -209,19 +189,17 @@ export class Azure extends TerraformStack {
             }
         });
 
-        const acaEnvStorage = new Resource(this, 'acaenvstorage', {
-            type: 'Microsoft.App/managedEnvironments/storages@2024-02-02-preview',
+        const acaEnvStorage = new ContainerAppEnvironmentStorage(this, 'acaenvstorage', {
+            accessKey: storageAccount.primaryAccessKey,
+            accessMode: 'ReadWrite',
+            accountName: storageAccount.name,
+            containerAppEnvironmentId: environment.id,
             name: 'gharunnerjobstorage',
-            parentId: environment.id,
-            body: {
-                properties: {
-                    nfsAzureFile: {
-                        accessMode: 'ReadWrite',
-                        server: `${storageAccount.name}.file.core.windows.net`,
-                        shareName: `/${storageAccount.name}/${storageShare.name}`
-                    }
-                }
-            }
+            shareName: storageShare.name,
+            dependsOn: [
+                // Name doesn't create dependsOn requirement, so adding that explicitly
+                storageShare
+            ] 
         })
 
         // Have to use Terraform local variable as trying to use jsonencode directly would fail.
@@ -382,6 +360,7 @@ export class Azure extends TerraformStack {
                                     {
                                         mountPath: '/tmp/_work',
                                         volumeName: runnerVolumeName,
+
                                     }
                                 ],
                                 env: [
@@ -427,7 +406,7 @@ export class Azure extends TerraformStack {
                             {
                                 name: runnerVolumeName,
                                 storageName: acaEnvStorage.name,
-                                storageType: 'NfsAzureFile'
+                                storageType: 'AzureFile'
                             }
                         ]
                     }
