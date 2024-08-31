@@ -12,9 +12,6 @@ import { RoleDefinition } from "@cdktf/provider-azurerm/lib/role-definition";
 import { DataAzurermSubscription } from "@cdktf/provider-azurerm/lib/data-azurerm-subscription";
 import { ContainerApp } from "@cdktf/provider-azurerm/lib/container-app";
 import { commonVariables } from "./variables";
-import { StorageAccount } from "@cdktf/provider-azurerm/lib/storage-account";
-import { StorageShare } from "@cdktf/provider-azurerm/lib/storage-share";
-import { ContainerAppEnvironmentStorage } from "@cdktf/provider-azurerm/lib/container-app-environment-storage";
 
 export class Azure extends TerraformStack {
     constructor(scope: Construct, id: string) {
@@ -134,26 +131,38 @@ export class Azure extends TerraformStack {
             }
         })
 
-        const storageAccount = new StorageAccount(this, 'storageAccount', {
-            accountReplicationType: 'LRS',
-            accountTier: 'Standard',
+        const storageAccount = new Resource(this, 'storageAccount', {
+            type: 'Microsoft.Storage/storageAccounts@2023-01-01',
+            parentId: rg.id,
             location,
             name: 'ghaexamplestorageaccount',
-            resourceGroupName: rg.name,
-            largeFileShareEnabled: true,
+            body: {
+                properties: {
+                    largeFileSharesState: 'Enabled'
+                },
+                sku: {
+                    name: 'Premium_LRS'
+                },
+                kind: 'FileStorage',
+            },
             lifecycle: {
                 ignoreChanges: [
                     'tags'
                 ]
             }
-        })
+        });
 
-        const storageShare = new StorageShare(this, 'storageShare', {
+        const storageShare = new Resource(this, 'storageShare', {
+            type: 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-01-01',
             name: 'ghaexampleshare',
-            quota: 1024,
-            storageAccountName: storageAccount.name,
-            enabledProtocol: 'SMB'
-        })
+            parentId: `${storageAccount.id}/fileServices/default`,
+            body: {
+                properties: {
+                    enabledProtocols: 'NFS',
+                    shareQuota: 1024,
+                }
+            },
+        });
 
         const environment = new Resource(this, 'acaenv', {
             type: 'Microsoft.App/managedEnvironments@2024-03-01',
@@ -189,17 +198,19 @@ export class Azure extends TerraformStack {
             }
         });
 
-        const acaEnvStorage = new ContainerAppEnvironmentStorage(this, 'acaenvstorage', {
-            accessKey: storageAccount.primaryAccessKey,
-            accessMode: 'ReadWrite',
-            accountName: storageAccount.name,
-            containerAppEnvironmentId: environment.id,
+        const acaEnvStorage = new Resource(this, 'acaenvstorage', {
+            type: 'Microsoft.App/managedEnvironments/storages@2024-02-02-preview',
             name: 'gharunnerjobstorage',
-            shareName: storageShare.name,
-            dependsOn: [
-                // Name doesn't create dependsOn requirement, so adding that explicitly
-                storageShare
-            ] 
+            parentId: environment.id,
+            body: {
+                properties: {
+                    nfsAzureFile: {
+                        accessMode: 'ReadWrite',
+                        server: `${storageAccount.name}.file.core.windows.net`,
+                        shareName: `/${storageAccount.name}/${storageShare.name}`
+                    }
+                }
+            }
         })
 
         // Have to use Terraform local variable as trying to use jsonencode directly would fail.
@@ -354,13 +365,21 @@ export class Azure extends TerraformStack {
                                 },
                                 // Have to use custom image as we want to run service as root to be able to install packages
                                 image: `${acr.loginServer}/root-actions-runner:latest`,
+                                probes: [
+                                    {
+                                        tcpSocket: {
+                                            port: 5000,
+                                        },
+                                        type: 'Readiness'
+                                    },
+                                    
+                                ],
                                 name: 'main',
                                 command: ['/bin/sh', '-c', 'export EXECID=$(cat /proc/sys/kernel/random/uuid) && mkdir -p /tmp/_work/$EXECID && ln -s /tmp/_work/$EXECID _work && /home/runner/run.sh ; rm -r /tmp/_work/$EXECID'],
                                 volumeMounts: [
                                     {
                                         mountPath: '/tmp/_work',
                                         volumeName: runnerVolumeName,
-
                                     }
                                 ],
                                 env: [
@@ -406,7 +425,8 @@ export class Azure extends TerraformStack {
                             {
                                 name: runnerVolumeName,
                                 storageName: acaEnvStorage.name,
-                                storageType: 'AzureFile'
+                                storageType: 'NfsAzureFile',
+                                mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
                             }
                         ]
                     }

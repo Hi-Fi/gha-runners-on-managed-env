@@ -107,7 +107,8 @@ function createJob(jobTaskProperties, services) {
                                 {
                                     name: 'work',
                                     storageName: process.env.STORAGE_NAME,
-                                    storageType: 'AzureFile',
+                                    storageType: 'NfsAzureFile',
+                                    mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
                                 }
                             ]
                         }
@@ -878,6 +879,7 @@ var path_1 = __importDefault(__nccwpck_require__(1017));
 var aca_1 = __nccwpck_require__(4053);
 var utils_1 = __nccwpck_require__(9297);
 var constants_1 = __nccwpck_require__(4865);
+var server_1 = __nccwpck_require__(6660);
 function prepareJob(args) {
     var _a, _b, _c, _d, _e, _f;
     return __awaiter(this, void 0, void 0, function () {
@@ -888,6 +890,7 @@ function prepareJob(args) {
                     if (!args.container) {
                         throw new Error('Job Container is required.');
                     }
+                    server_1.LongPollingServer.startServer();
                     //await prunePods()
                     core.debug("copying externals");
                     return [4 /*yield*/, copyExternalsToRoot()];
@@ -928,21 +931,24 @@ function prepareJob(args) {
                         throw new Error('created task should have ID');
                     }
                     core.debug("Job task created, waiting for it to come online ".concat(createdJob.id));
+                    return [4 /*yield*/, server_1.LongPollingServer.waitForSubscriber()];
+                case 6:
+                    _g.sent();
                     core.debug('Job task is ready for traffic');
                     isAlpine = false;
-                    _g.label = 6;
-                case 6:
-                    _g.trys.push([6, 8, , 9]);
-                    return [4 /*yield*/, (0, aca_1.isTaskContainerAlpine)(createdJob.id, constants_1.JOB_CONTAINER_NAME)];
+                    _g.label = 7;
                 case 7:
-                    isAlpine = _g.sent();
-                    return [3 /*break*/, 9];
+                    _g.trys.push([7, 9, , 10]);
+                    return [4 /*yield*/, (0, aca_1.isTaskContainerAlpine)(createdJob.id, constants_1.JOB_CONTAINER_NAME)];
                 case 8:
+                    isAlpine = _g.sent();
+                    return [3 /*break*/, 10];
+                case 9:
                     err_2 = _g.sent();
                     core.debug("Failed to determine if the task is alpine: ".concat(JSON.stringify(err_2)));
                     message = ((_f = (_e = err_2 === null || err_2 === void 0 ? void 0 : err_2.response) === null || _e === void 0 ? void 0 : _e.body) === null || _f === void 0 ? void 0 : _f.message) || err_2;
                     throw new Error("failed to determine if the task is alpine: ".concat(message));
-                case 9:
+                case 10:
                     core.debug("Setting isAlpine to ".concat(isAlpine));
                     return [2 /*return*/];
             }
@@ -957,17 +963,20 @@ function copyExternalsToRoot() {
             switch (_a.label) {
                 case 0:
                     workspace = constants_1.RUNNER_WORKSPACE;
-                    if (!workspace) return [3 /*break*/, 2];
+                    if (!workspace) return [3 /*break*/, 3];
                     core.debug("Copying externals from ".concat(path_1.default.join(workspace, '../../externals'), " to ").concat(path_1.default.join(workspace, '../externals')));
                     // We need server binary at new job, so have to wait here
-                    return [4 /*yield*/, io.cp(path_1.default.join(workspace, '../../externals'), path_1.default.join(workspace, '../externals'), { force: true, recursive: true, copySourceDirectory: false })
-                        // promises.push(exec.exec('cp', ['-r', path.join(workspace, '../../externals'), path.join(workspace, '../externals')]))
-                    ];
+                    return [4 /*yield*/, io.mkdirP('../externals')];
                 case 1:
                     // We need server binary at new job, so have to wait here
                     _a.sent();
-                    _a.label = 2;
-                case 2: return [2 /*return*/];
+                    return [4 /*yield*/, io.cp(path_1.default.join(workspace, '../../externals/executor'), path_1.default.join(workspace, '../externals/executor'), { force: false, recursive: true, copySourceDirectory: false })
+                        // exec.exec('cp', ['-r', path.join(workspace, '../../externals'), path.join(workspace, '../externals')])
+                    ];
+                case 2:
+                    _a.sent();
+                    _a.label = 3;
+                case 3: return [2 /*return*/];
             }
         });
     });
@@ -991,7 +1000,7 @@ function createContainerDefinition(container, name, jobContainer) {
         }), true), [
             {
                 name: 'RUNNER_HOST',
-                value: process.env.CONTAINER_APP_HOSTNAME
+                value: "".concat(process.env.CONTAINER_APP_REVISION, ".internal.").concat(process.env.CONTAINER_APP_ENV_DNS_SUFFIX)
             },
             {
                 name: 'RUNNER_PORT',
@@ -32724,7 +32733,8 @@ function createJob(jobTaskProperties, services) {
                                 {
                                     name: 'work',
                                     storageName: process.env.STORAGE_NAME,
-                                    storageType: 'AzureFile',
+                                    storageType: 'NfsAzureFile',
+                                    mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
                                 }
                             ]
                         }
@@ -33127,8 +33137,11 @@ var LongPollingServer = /** @class */ (function () {
     };
     LongPollingServer.prototype.handler = function (req, res) {
         var parsedUrl = (0, url_1.parse)(req.url, true);
+        if (parsedUrl.pathname === '/' || !parsedUrl.pathname) {
+            res.end();
+        }
         // A new client would like to subscribe.
-        if (parsedUrl.pathname === '/poll') {
+        else if (parsedUrl.pathname === '/poll') {
             var id = (0, crypto_1.randomUUID)();
             res.setHeader('Content-Type', 'text/plain;charset=utf-8');
             res.setHeader("Cache-Control", "no-cache, must-revalidate");
