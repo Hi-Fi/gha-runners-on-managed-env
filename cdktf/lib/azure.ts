@@ -320,8 +320,11 @@ export class Azure extends TerraformStack {
 
         const runnerVolumeName = 'work'
 
-        const ghaRunnerApp = new Resource(this, 'ghaRunnerApp', {
-            type: 'Microsoft.App/containerApps@2024-02-02-preview',
+        /**
+         * @see https://learn.microsoft.com/en-us/azure/templates/microsoft.app/jobs?pivots=deployment-language-terraform
+         */
+        const ghaRunnerJob = new Resource(this, 'ghaRunnerJob', {
+            type: 'Microsoft.App/jobs@2024-02-02-preview',
             identity: [
                 {
                     type: 'UserAssigned',
@@ -330,19 +333,18 @@ export class Azure extends TerraformStack {
                     ]
                 }
             ],
-            name: 'gha-runner-app-01',
+            name: 'gha-runner-job-01',
             parentId: rg.id,
             location,
             body: {
-
                 properties: {
                     configuration: {
-                        activeRevisionsMode: 'Multiple',
-                        ingress: {
-                            external: false,
-                            targetPort: 5000,
-                            allowInsecure: true
+                        manualTriggerConfig: {
+                            parallelism: 1,
+                            replicaCompletionCount: 1,
                         },
+                        triggerType: 'Manual',
+                        replicaTimeout: 1200,
                         registries: [
                             {
                                 identity: identity.id,
@@ -352,11 +354,6 @@ export class Azure extends TerraformStack {
                     },
                     environmentId: environment.id,
                     template: {
-                        // This is just placeholder, so no need to scale any replicas.
-                        scale: {
-                            maxReplicas: 1,
-                            minReplicas: 0
-                        },
                         containers: [
                             {
                                 resources: {
@@ -365,15 +362,6 @@ export class Azure extends TerraformStack {
                                 },
                                 // Have to use custom image as we want to run service as root to be able to install packages
                                 image: `${acr.loginServer}/root-actions-runner:latest`,
-                                probes: [
-                                    {
-                                        tcpSocket: {
-                                            port: 5000,
-                                        },
-                                        type: 'Readiness'
-                                    },
-                                    
-                                ],
                                 name: 'main',
                                 command: ['/bin/sh', '-c', 'export EXECID=$(cat /proc/sys/kernel/random/uuid) && mkdir -p /tmp/_work/$EXECID && ln -s /tmp/_work/$EXECID _work && /home/runner/run.sh ; rm -r /tmp/_work/$EXECID'],
                                 volumeMounts: [
@@ -496,7 +484,7 @@ export class Azure extends TerraformStack {
                             },
                             {
                                 name: 'APP_NAME',
-                                value: ghaRunnerApp.name
+                                value: ghaRunnerJob.name
                             },
                             {
                                 name: 'SCALE_SET_NAME',
@@ -526,7 +514,6 @@ export class Azure extends TerraformStack {
             permissions: [
                 {
                     actions: [
-                        'microsoft.app/containerApps/*',
                         'microsoft.app/jobs/start/action',
                         'microsoft.app/jobs/stop/action',
                         'microsoft.app/jobs/read',
@@ -556,7 +543,7 @@ export class Azure extends TerraformStack {
         // Allow autoscaler to create new revision of app
         new RoleAssignment(this, 'scaleJobRoleAssignment', {
             principalId: autoscalerApp.identity.principalId,
-            scope: ghaRunnerApp.id,
+            scope: ghaRunnerJob.id,
             roleDefinitionId: role.roleDefinitionResourceId
         })
 

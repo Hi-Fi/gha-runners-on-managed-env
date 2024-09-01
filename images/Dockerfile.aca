@@ -1,15 +1,15 @@
-FROM golang:1.22.3 as builder
+FROM golang:1.22.6 as builder
 
 # Make static bundle to work with scratch/distroless
 ENV CGO_ENABLED=0
 
 WORKDIR /build
 
-COPY ./utils/executor/go.mod ./
+COPY ./utils/file-executor/go.mod ./
 
 RUN go mod download
 
-COPY utils/executor .
+COPY utils/file-executor .
 
 ARG TARGETOS=linux TARGETARCH=amd64 TARGETVARIANT=v7
 
@@ -24,6 +24,11 @@ COPY --from=builder /out/executor /home/runner/externals/executor
 USER root
 
 ENV RUNNER_ALLOW_RUNASROOT=true
+# # https://github.blog/changelog/2024-03-07-github-actions-all-actions-will-run-on-node20-instead-of-node16-by-default/
+# ENV FORCE_JAVASCRIPT_ACTIONS_TO_NODE20=true
+
+# # Remove Node16 to speed up things
+# RUN rm -r /home/runner/externals/node16 /home/runner/externals/node16_alpine
 
 COPY ./images/hooks/aca/index.js /home/runner/aca/index.js
 
