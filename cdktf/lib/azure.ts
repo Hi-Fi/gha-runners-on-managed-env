@@ -164,6 +164,18 @@ export class Azure extends TerraformStack {
             },
         });
 
+        const externalsShare = new Resource(this, 'externalsShare', {
+            type: 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-01-01',
+            name: 'ghaexternalsshare',
+            parentId: `${storageAccount.id}/fileServices/default`,
+            body: {
+                properties: {
+                    enabledProtocols: 'NFS',
+                    shareQuota: 1024,
+                }
+            },
+        });
+
         const environment = new Resource(this, 'acaenv', {
             type: 'Microsoft.App/managedEnvironments@2024-03-01',
             parentId: rg.id,
@@ -208,6 +220,21 @@ export class Azure extends TerraformStack {
                         accessMode: 'ReadWrite',
                         server: `${storageAccount.name}.file.core.windows.net`,
                         shareName: `/${storageAccount.name}/${storageShare.name}`
+                    }
+                }
+            }
+        })
+
+        const acaExternalStorage = new Resource(this, 'acaexternalstorage', {
+            type: 'Microsoft.App/managedEnvironments/storages@2024-02-02-preview',
+            name: 'gharunnerexternalstorage',
+            parentId: environment.id,
+            body: {
+                properties: {
+                    nfsAzureFile: {
+                        accessMode: 'ReadWrite',
+                        server: `${storageAccount.name}.file.core.windows.net`,
+                        shareName: `/${storageAccount.name}/${externalsShare.name}`
                     }
                 }
             }
@@ -319,6 +346,7 @@ export class Azure extends TerraformStack {
         });
 
         const runnerVolumeName = 'work'
+        const externalVolumeName = 'externals'
 
         /**
          * @see https://learn.microsoft.com/en-us/azure/templates/microsoft.app/jobs?pivots=deployment-language-terraform
@@ -368,6 +396,10 @@ export class Azure extends TerraformStack {
                                     {
                                         mountPath: '/tmp/_work',
                                         volumeName: runnerVolumeName,
+                                    },
+                                    {
+                                        mountPath: '/tmp/externals',
+                                        volumeName: externalVolumeName,
                                     }
                                 ],
                                 env: [
@@ -399,6 +431,10 @@ export class Azure extends TerraformStack {
                                         value: acaEnvStorage.name
                                     },
                                     {
+                                        name: 'EXTERNAL_STORAGE_NAME',
+                                        value: acaExternalStorage.name
+                                    },
+                                    {
                                         name: 'SUBSCRIPTION_ID',
                                         value: sub.subscriptionId
                                     },
@@ -413,6 +449,12 @@ export class Azure extends TerraformStack {
                             {
                                 name: runnerVolumeName,
                                 storageName: acaEnvStorage.name,
+                                storageType: 'NfsAzureFile',
+                                mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
+                            },
+                            {
+                                name: externalVolumeName,
+                                storageName: acaExternalStorage.name,
                                 storageType: 'NfsAzureFile',
                                 mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
                             }

@@ -67,7 +67,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.createJob = exports.POD_VOLUME_NAME = void 0;
+exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.createJob = exports.EXTERNALS_VOLUME_NAME = exports.POD_VOLUME_NAME = void 0;
 var core = __importStar(__nccwpck_require__(2186));
 var arm_appcontainers_1 = __nccwpck_require__(223);
 var identity_1 = __nccwpck_require__(3084);
@@ -77,6 +77,7 @@ var subscriptionId = (_a = process.env.SUBSCRIPTION_ID) !== null && _a !== void 
 var acaClient = new arm_appcontainers_1.ContainerAppsAPIClient(new identity_1.DefaultAzureCredential(), subscriptionId);
 var DEFAULT_WAIT_FOR_POD_TIME_SECONDS = 10 * 60; // 10 min
 exports.POD_VOLUME_NAME = 'work';
+exports.EXTERNALS_VOLUME_NAME = 'externals';
 function createJob(jobTaskProperties, services) {
     return __awaiter(this, void 0, void 0, function () {
         var containers, jobEnvelope, job, execution;
@@ -106,8 +107,14 @@ function createJob(jobTaskProperties, services) {
                             containers: containers,
                             volumes: [
                                 {
-                                    name: 'work',
+                                    name: exports.POD_VOLUME_NAME,
                                     storageName: process.env.STORAGE_NAME,
+                                    storageType: 'NfsAzureFile',
+                                    mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
+                                },
+                                {
+                                    name: exports.EXTERNALS_VOLUME_NAME,
+                                    storageName: process.env.EXTERNAL_STORAGE_NAME,
                                     storageType: 'NfsAzureFile',
                                     mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
                                 }
@@ -146,7 +153,6 @@ function execTaskStep(command, _taskArn, _containerName) {
                 case 1:
                     response = _c.sent();
                     core.info(response !== null && response !== void 0 ? response : "No logs provided for command ".concat(command.join(' ')));
-                    response === null || response === void 0 ? void 0 : response.endsWith('0');
                     return [2 /*return*/, (_b = ((_a = response === null || response === void 0 ? void 0 : response.trim()) !== null && _a !== void 0 ? _a : '1')) === null || _b === void 0 ? void 0 : _b.endsWith('0')];
             }
         });
@@ -442,9 +448,8 @@ function containerVolumes(userMountVolumes, jobContainer, containerAction) {
         return mounts;
     }
     mounts.push({
-        volumeName: index_1.POD_VOLUME_NAME,
+        volumeName: index_1.EXTERNALS_VOLUME_NAME,
         mountPath: '/__e',
-        subPath: path.join(executionId, 'externals')
     }, {
         volumeName: index_1.POD_VOLUME_NAME,
         mountPath: '/github/home',
@@ -506,7 +511,7 @@ function writeEntryPointScript(workingDirectory, entryPoint, entryPointArgs, pre
         environmentPrefix = "env ".concat(envBuffer.join(' '), " ");
     }
     // As ECS doesn't return/handle script status with exec command, printing that to output for parsing
-    var content = "#!/bin/sh -l\nset -e\nfinally() {\n  local exit_code=\"${1:-0}\"\n\n  echo \"SCRIPT_RUN_STATUS: ${exit_code}\"\n  exit \"${exit_code}\"\n}\ntrap 'finally $?' EXIT\n".concat(exportPath, "\ncd ").concat(workingDirectory, " && exec ").concat(environmentPrefix, " ").concat(entryPoint, " ").concat((entryPointArgs === null || entryPointArgs === void 0 ? void 0 : entryPointArgs.length) ? entryPointArgs.join(' ') : '', "\n");
+    var content = "#!/bin/sh -l\n".concat(exportPath, "\ncd ").concat(workingDirectory, " && exec ").concat(environmentPrefix, " ").concat(entryPoint, " ").concat((entryPointArgs === null || entryPointArgs === void 0 ? void 0 : entryPointArgs.length) ? entryPointArgs.join(' ') : '', "\n");
     var jobId = (0, uuid_1.v1)();
     var filename = "".concat(jobId, ".sh");
     var entryPointPath = "".concat(process.env.RUNNER_TEMP, "/").concat(filename);
@@ -1008,7 +1013,7 @@ function copyExternalsToRoot() {
                     if (!workspace) return [3 /*break*/, 2];
                     core.debug("Copying externals from ".concat(path_1.default.join(workspace, '../../externals'), " to ").concat(path_1.default.join(workspace, '../externals')));
                     // We need server binary at new job, so have to wait here
-                    return [4 /*yield*/, io.cp(path_1.default.join(workspace, '../../externals'), path_1.default.join(workspace, '../externals'), { force: true, recursive: true, copySourceDirectory: false })
+                    return [4 /*yield*/, io.cp(path_1.default.join(workspace, '../../externals'), '/tmp/externals', { force: false, recursive: true, copySourceDirectory: false })
                         // exec.exec('cp', ['-r', path.join(workspace, '../../externals'), path.join(workspace, '../externals')])
                     ];
                 case 1:
@@ -1298,22 +1303,24 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.runScriptStep = void 0;
 /* eslint-disable @typescript-eslint/no-unused-vars */
 var fs = __importStar(__nccwpck_require__(7147));
-var aca_1 = __nccwpck_require__(4053);
+var core = __importStar(__nccwpck_require__(2186));
 var utils_1 = __nccwpck_require__(9297);
-var constants_1 = __nccwpck_require__(4865);
-function runScriptStep(args, state) {
+var watcher_1 = __nccwpck_require__(9266);
+function runScriptStep(args, state, responseFile) {
+    var _a, _b;
     return __awaiter(this, void 0, void 0, function () {
-        var entryPoint, entryPointArgs, environmentVariables, _a, containerPath, runnerPath, response;
-        return __generator(this, function (_b) {
-            switch (_b.label) {
+        var entryPoint, entryPointArgs, environmentVariables, _c, runnerPath, jobId, response;
+        return __generator(this, function (_d) {
+            switch (_d.label) {
                 case 0:
                     entryPoint = args.entryPoint, entryPointArgs = args.entryPointArgs, environmentVariables = args.environmentVariables;
-                    _a = (0, utils_1.writeEntryPointScript)(args.workingDirectory, entryPoint, entryPointArgs, args.prependPath, environmentVariables), containerPath = _a.containerPath, runnerPath = _a.runnerPath;
-                    return [4 /*yield*/, (0, aca_1.execTaskStep)(['sh', containerPath], state.jobPod, constants_1.JOB_CONTAINER_NAME)];
+                    _c = (0, utils_1.writeEntryPointScript)(args.workingDirectory, entryPoint, entryPointArgs, args.prependPath, environmentVariables), runnerPath = _c.runnerPath, jobId = _c.jobId;
+                    return [4 /*yield*/, watcher_1.FileWatcher.waitForJobCompletion(jobId)];
                 case 1:
-                    response = _b.sent();
+                    response = _d.sent();
                     fs.rmSync(runnerPath);
-                    if (!response) {
+                    core.info(response !== null && response !== void 0 ? response : "No logs provided for command ".concat(entryPoint, " ").concat(entryPointArgs.join(' ')));
+                    if (!((_b = ((_a = response === null || response === void 0 ? void 0 : response.trim()) !== null && _a !== void 0 ? _a : '1')) === null || _b === void 0 ? void 0 : _b.endsWith('0'))) {
                         throw new Error('execPodStep failed');
                     }
                     return [2 /*return*/];
@@ -1426,7 +1433,7 @@ function run() {
                 case 5:
                     _b.sent();
                     return [2 /*return*/, process.exit(0)];
-                case 6: return [4 /*yield*/, (0, hooks_1.runScriptStep)(args, state)];
+                case 6: return [4 /*yield*/, (0, hooks_1.runScriptStep)(args, state, responseFile)];
                 case 7:
                     _b.sent();
                     return [2 /*return*/, process.exit(0)];
@@ -39389,7 +39396,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.createJob = exports.POD_VOLUME_NAME = void 0;
+exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.createJob = exports.EXTERNALS_VOLUME_NAME = exports.POD_VOLUME_NAME = void 0;
 var core = __importStar(__nccwpck_require__(2186));
 var arm_appcontainers_1 = __nccwpck_require__(223);
 var identity_1 = __nccwpck_require__(3084);
@@ -39399,6 +39406,7 @@ var subscriptionId = (_a = process.env.SUBSCRIPTION_ID) !== null && _a !== void 
 var acaClient = new arm_appcontainers_1.ContainerAppsAPIClient(new identity_1.DefaultAzureCredential(), subscriptionId);
 var DEFAULT_WAIT_FOR_POD_TIME_SECONDS = 10 * 60; // 10 min
 exports.POD_VOLUME_NAME = 'work';
+exports.EXTERNALS_VOLUME_NAME = 'externals';
 function createJob(jobTaskProperties, services) {
     return __awaiter(this, void 0, void 0, function () {
         var containers, jobEnvelope, job, execution;
@@ -39428,8 +39436,14 @@ function createJob(jobTaskProperties, services) {
                             containers: containers,
                             volumes: [
                                 {
-                                    name: 'work',
+                                    name: exports.POD_VOLUME_NAME,
                                     storageName: process.env.STORAGE_NAME,
+                                    storageType: 'NfsAzureFile',
+                                    mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
+                                },
+                                {
+                                    name: exports.EXTERNALS_VOLUME_NAME,
+                                    storageName: process.env.EXTERNAL_STORAGE_NAME,
                                     storageType: 'NfsAzureFile',
                                     mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
                                 }
@@ -39468,7 +39482,6 @@ function execTaskStep(command, _taskArn, _containerName) {
                 case 1:
                     response = _c.sent();
                     core.info(response !== null && response !== void 0 ? response : "No logs provided for command ".concat(command.join(' ')));
-                    response === null || response === void 0 ? void 0 : response.endsWith('0');
                     return [2 /*return*/, (_b = ((_a = response === null || response === void 0 ? void 0 : response.trim()) !== null && _a !== void 0 ? _a : '1')) === null || _b === void 0 ? void 0 : _b.endsWith('0')];
             }
         });
@@ -39764,9 +39777,8 @@ function containerVolumes(userMountVolumes, jobContainer, containerAction) {
         return mounts;
     }
     mounts.push({
-        volumeName: index_1.POD_VOLUME_NAME,
+        volumeName: index_1.EXTERNALS_VOLUME_NAME,
         mountPath: '/__e',
-        subPath: path.join(executionId, 'externals')
     }, {
         volumeName: index_1.POD_VOLUME_NAME,
         mountPath: '/github/home',
@@ -39828,7 +39840,7 @@ function writeEntryPointScript(workingDirectory, entryPoint, entryPointArgs, pre
         environmentPrefix = "env ".concat(envBuffer.join(' '), " ");
     }
     // As ECS doesn't return/handle script status with exec command, printing that to output for parsing
-    var content = "#!/bin/sh -l\nset -e\nfinally() {\n  local exit_code=\"${1:-0}\"\n\n  echo \"SCRIPT_RUN_STATUS: ${exit_code}\"\n  exit \"${exit_code}\"\n}\ntrap 'finally $?' EXIT\n".concat(exportPath, "\ncd ").concat(workingDirectory, " && exec ").concat(environmentPrefix, " ").concat(entryPoint, " ").concat((entryPointArgs === null || entryPointArgs === void 0 ? void 0 : entryPointArgs.length) ? entryPointArgs.join(' ') : '', "\n");
+    var content = "#!/bin/sh -l\n".concat(exportPath, "\ncd ").concat(workingDirectory, " && exec ").concat(environmentPrefix, " ").concat(entryPoint, " ").concat((entryPointArgs === null || entryPointArgs === void 0 ? void 0 : entryPointArgs.length) ? entryPointArgs.join(' ') : '', "\n");
     var jobId = (0, uuid_1.v1)();
     var filename = "".concat(jobId, ".sh");
     var entryPointPath = "".concat(process.env.RUNNER_TEMP, "/").concat(filename);
@@ -40068,12 +40080,17 @@ var FileWatcher = /** @class */ (function () {
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
-                        if (!!FileWatcher.responses.get(jobId)) return [3 /*break*/, 2];
-                        return [4 /*yield*/, new Promise(function (resolve) { return setTimeout(resolve, 500); })];
+                        core.debug("Waiting for job ".concat(jobId, " to complete"));
+                        _a.label = 1;
                     case 1:
+                        if (!!FileWatcher.responses.get(jobId)) return [3 /*break*/, 3];
+                        return [4 /*yield*/, new Promise(function (resolve) { return setTimeout(resolve, 2000); })];
+                    case 2:
                         _a.sent();
-                        return [3 /*break*/, 0];
-                    case 2: return [2 /*return*/, FileWatcher.responses.get(jobId)];
+                        return [3 /*break*/, 1];
+                    case 3:
+                        core.debug("Job ".concat(jobId, " completed"));
+                        return [2 /*return*/, FileWatcher.responses.get(jobId)];
                 }
             });
         });
