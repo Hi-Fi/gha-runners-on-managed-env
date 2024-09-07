@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/fsnotify/fsnotify"
@@ -21,8 +20,6 @@ type CommandResponse struct {
 func waitForCommands(watcher filenotify.FileWatcher) {
 	log.Println("Starting to watch directory")
 
-	var executedCommands *[]string
-
 	go func() {
 		for {
 			select {
@@ -30,8 +27,7 @@ func waitForCommands(watcher filenotify.FileWatcher) {
 
 				if event.Has(fsnotify.Create) {
 					log.Printf("File %s written\n", event.Name)
-					if strings.HasSuffix(event.Name, ".sh") && !slices.Contains(*executedCommands, event.Name) {
-						*executedCommands = append(*executedCommands, event.Name)
+					if strings.HasSuffix(event.Name, ".sh") {
 						os.Chmod(event.Name, 0777)
 						executeCommand(event.Name)
 					} else {
@@ -48,19 +44,36 @@ func waitForCommands(watcher filenotify.FileWatcher) {
 	<-make(chan struct{})
 }
 
-func executeCommand(command string) ([]byte, error) {
+func executeCommand(command string) {
+	// Expect that command will succeed
+	rc := 0
+
+	defer writeCompletionFile(command, &rc)
 	log.Printf("Executing command %s", command)
 	commandContent, _ := os.ReadFile(command)
 	log.Println(string(commandContent))
-	output, err := exec.Command("/bin/sh", command).Output()
+	outfile, err := os.Create(fmt.Sprintf("%s.log", command))
+	if err != nil {
+		fmt.Printf("Could not create output file. Error: %s\n", err.Error())
+		rc = 1
+		return
+	}
+	defer outfile.Close()
+	execution := exec.Command("/bin/sh", command)
+	execution.Stderr = outfile
+	execution.Stdout = outfile
+
+	err = execution.Run()
 	if err != nil {
 		fmt.Printf("Some error happened. Error: %s\n", err.Error())
+		rc = 1
 	}
+}
+
+func writeCompletionFile(command string, rc *int) {
 	log.Println("Execution completed")
-	log.Println(string(output))
-	log.Printf("Writing logs to %s.log", command)
-	os.WriteFile(fmt.Sprintf("%s.log", command), output, 0777)
-	return output, err
+	log.Printf("Writing return code %d to %s.rc", *rc, command)
+	os.WriteFile(fmt.Sprintf("%s.rc", command), []byte(fmt.Sprintf("%d ", *rc)), 0777)
 }
 
 func main() {

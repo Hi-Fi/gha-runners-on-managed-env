@@ -24,11 +24,9 @@ COPY --from=builder /out/executor /home/runner/externals/executor
 USER root
 
 ENV RUNNER_ALLOW_RUNASROOT=true
-# # https://github.blog/changelog/2024-03-07-github-actions-all-actions-will-run-on-node20-instead-of-node16-by-default/
-# ENV FORCE_JAVASCRIPT_ACTIONS_TO_NODE20=true
 
-# # Remove Node16 to speed up things
-# RUN rm -r /home/runner/externals/node16 /home/runner/externals/node16_alpine
+# Calculate hash of externals to prevent need to copy those every time when using shared location for those
+RUN find /home/runner/externals -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum > /home/runner/externals/externals.sum
 
 COPY ./images/hooks/aca/index.js /home/runner/aca/index.js
 
