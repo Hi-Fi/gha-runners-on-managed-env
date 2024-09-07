@@ -1,6 +1,7 @@
 import { AzurermProvider } from "@cdktf/provider-azurerm/lib/provider";
 import { AzapiProvider } from '../.gen/providers/azapi/provider'
 import { Resource } from '../.gen/providers/azapi/resource'
+import { DataAzapiResourceAction } from '../.gen/providers/azapi/data-azapi-resource-action'
 import { Fn, TerraformLocal, TerraformStack, TerraformVariable } from "cdktf";
 import { Construct } from "constructs";
 import { ResourceGroup } from "@cdktf/provider-azurerm/lib/resource-group";
@@ -12,6 +13,7 @@ import { RoleDefinition } from "@cdktf/provider-azurerm/lib/role-definition";
 import { DataAzurermSubscription } from "@cdktf/provider-azurerm/lib/data-azurerm-subscription";
 import { ContainerApp } from "@cdktf/provider-azurerm/lib/container-app";
 import { commonVariables } from "./variables";
+import { ContainerAppEnvironmentStorage } from "@cdktf/provider-azurerm/lib/container-app-environment-storage";
 
 export class Azure extends TerraformStack {
     constructor(scope: Construct, id: string) {
@@ -29,12 +31,6 @@ export class Azure extends TerraformStack {
         const sub = new DataAzurermSubscription(this, 'sub', {});
 
         const { pat, githubConfigUrl } = commonVariables(this);
-
-        const subnetId = new TerraformVariable(this, 'subnetId', {
-            description: 'Azure subnet resource ID that has assigned for microsoft.app/managedEnvironment',
-            nullable: false,
-            sensitive: true
-        });
 
         const location = new TerraformVariable(this, 'location', {
             default: 'westeurope',
@@ -141,15 +137,18 @@ export class Azure extends TerraformStack {
                     largeFileSharesState: 'Enabled'
                 },
                 sku: {
-                    name: 'Premium_LRS'
+                    name: 'Standard_LRS'
                 },
-                kind: 'FileStorage',
+                kind: 'StorageV2',
             },
             lifecycle: {
                 ignoreChanges: [
                     'tags'
                 ]
-            }
+            },
+            responseExportValues: [
+
+            ]
         });
 
         const storageShare = new Resource(this, 'storageShare', {
@@ -158,8 +157,7 @@ export class Azure extends TerraformStack {
             parentId: `${storageAccount.id}/fileServices/default`,
             body: {
                 properties: {
-                    enabledProtocols: 'NFS',
-                    shareQuota: 1024,
+                    enabledProtocols: 'SMB',
                 }
             },
         });
@@ -170,8 +168,7 @@ export class Azure extends TerraformStack {
             parentId: `${storageAccount.id}/fileServices/default`,
             body: {
                 properties: {
-                    enabledProtocols: 'NFS',
-                    shareQuota: 1024,
+                    enabledProtocols: 'SMB',
                 }
             },
         });
@@ -191,10 +188,6 @@ export class Azure extends TerraformStack {
                         }
                     },
                     infrastructureResourceGroup: 'managed-aca-rg',
-                    vnetConfiguration: {
-                        infrastructureSubnetId: subnetId.value,
-                        internal: true
-                    },
                     workloadProfiles: [
                         {
                             name: 'Consumption',
@@ -210,35 +203,39 @@ export class Azure extends TerraformStack {
             }
         });
 
-        const acaEnvStorage = new Resource(this, 'acaenvstorage', {
-            type: 'Microsoft.App/managedEnvironments/storages@2024-02-02-preview',
-            name: 'gharunnerjobstorage',
-            parentId: environment.id,
-            body: {
-                properties: {
-                    nfsAzureFile: {
-                        accessMode: 'ReadWrite',
-                        server: `${storageAccount.name}.file.core.windows.net`,
-                        shareName: `/${storageAccount.name}/${storageShare.name}`
-                    }
-                }
-            }
-        })
+        const storageAccessKey = new DataAzapiResourceAction(this, 'storageAccessKeys', {
+            type: 'Microsoft.Storage/storageAccounts@2023-01-01',
+            action: 'listKeys',
+            resourceId: storageAccount.id,
+            responseExportValues: ['keys']
+        });
 
-        const acaExternalStorage = new Resource(this, 'acaexternalstorage', {
-            type: 'Microsoft.App/managedEnvironments/storages@2024-02-02-preview',
+        const acaEnvStorage = new ContainerAppEnvironmentStorage(this, 'acaenvstorage', {
+            name: 'gharunnerjobstorage',
+            accessKey: storageAccessKey.output.lookup('keys'),
+            accessMode: 'ReadWrite',
+            accountName: storageAccount.name,
+            containerAppEnvironmentId: environment.id,
+            shareName: storageShare.name,
+            dependsOn: [
+                // Name doesn't create dependsOn requirement, so adding that explicitly
+                storageShare
+            ] 
+        });
+
+        const acaExternalStorage = new ContainerAppEnvironmentStorage(this, 'acaexternalstorage', {
             name: 'gharunnerexternalstorage',
-            parentId: environment.id,
-            body: {
-                properties: {
-                    nfsAzureFile: {
-                        accessMode: 'ReadWrite',
-                        server: `${storageAccount.name}.file.core.windows.net`,
-                        shareName: `/${storageAccount.name}/${externalsShare.name}`
-                    }
-                }
-            }
-        })
+            accessKey: storageAccessKey.output.lookup('keys'),
+            accessMode: 'ReadWrite',
+            accountName: storageAccount.name,
+            containerAppEnvironmentId: environment.id,
+            shareName: externalsShare.name,
+            dependsOn: [
+                // Name doesn't create dependsOn requirement, so adding that explicitly
+                externalsShare
+            ] 
+        });
+        
 
         // Have to use Terraform local variable as trying to use jsonencode directly would fail.
         const dockerConfig = new TerraformLocal(this, 'dockerConfig', {
@@ -449,14 +446,14 @@ export class Azure extends TerraformStack {
                             {
                                 name: runnerVolumeName,
                                 storageName: acaEnvStorage.name,
-                                storageType: 'NfsAzureFile',
-                                mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
+                                storageType: 'AzureFile',
+                                mountOptions: 'mfsymlinks'
                             },
                             {
                                 name: externalVolumeName,
                                 storageName: acaExternalStorage.name,
-                                storageType: 'NfsAzureFile',
-                                mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
+                                storageType: 'AzureFile',
+                                mountOptions: 'mfsymlinks'
                             }
                         ]
                     }

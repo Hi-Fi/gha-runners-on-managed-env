@@ -109,14 +109,14 @@ function createJob(jobTaskProperties, services) {
                                 {
                                     name: exports.POD_VOLUME_NAME,
                                     storageName: process.env.STORAGE_NAME,
-                                    storageType: 'NfsAzureFile',
-                                    mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
+                                    storageType: 'AzureFile',
+                                    mountOptions: 'mfsymlinks'
                                 },
                                 {
                                     name: exports.EXTERNALS_VOLUME_NAME,
                                     storageName: process.env.EXTERNAL_STORAGE_NAME,
-                                    storageType: 'NfsAzureFile',
-                                    mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
+                                    storageType: 'AzureFile',
+                                    mountOptions: 'mfsymlinks'
                                 }
                             ]
                         }
@@ -896,6 +896,7 @@ var aca_1 = __nccwpck_require__(4053);
 var utils_1 = __nccwpck_require__(9297);
 var constants_1 = __nccwpck_require__(4865);
 var watcher_1 = __nccwpck_require__(9266);
+var fs_1 = __nccwpck_require__(7147);
 function prepareJob(args, responseFile) {
     var _a, _b, _c, _d, _e, _f;
     return __awaiter(this, void 0, void 0, function () {
@@ -1011,11 +1012,15 @@ function copyExternalsToRoot() {
                 case 0:
                     workspace = constants_1.RUNNER_WORKSPACE;
                     if (!workspace) return [3 /*break*/, 2];
-                    core.debug("Copying externals from ".concat(path_1.default.join(workspace, '../../externals'), " to ").concat(path_1.default.join(workspace, '../externals')));
+                    if ((0, fs_1.existsSync)(path_1.default.join(workspace, '../../externals/externals.sum')) &&
+                        (0, fs_1.existsSync)('/tmp/externals/externals.sum') &&
+                        (0, fs_1.readFileSync)(path_1.default.join(workspace, '../../externals/externals.sum'), 'utf8') === (0, fs_1.readFileSync)('/tmp/externals/externals.sum', 'utf8')) {
+                        core.info('Provided externals version already exists at target, no need to copy');
+                    }
+                    else { }
+                    core.debug('Copying externals');
                     // We need server binary at new job, so have to wait here
-                    return [4 /*yield*/, io.cp(path_1.default.join(workspace, '../../externals'), '/tmp/externals', { force: false, recursive: true, copySourceDirectory: false })
-                        // exec.exec('cp', ['-r', path.join(workspace, '../../externals'), path.join(workspace, '../externals')])
-                    ];
+                    return [4 /*yield*/, io.cp(path_1.default.join(workspace, '../../externals'), '/tmp/externals', { force: true, recursive: true, copySourceDirectory: false })];
                 case 1:
                     // We need server binary at new job, so have to wait here
                     _a.sent();
@@ -39438,14 +39443,14 @@ function createJob(jobTaskProperties, services) {
                                 {
                                     name: exports.POD_VOLUME_NAME,
                                     storageName: process.env.STORAGE_NAME,
-                                    storageType: 'NfsAzureFile',
-                                    mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
+                                    storageType: 'AzureFile',
+                                    mountOptions: 'mfsymlinks'
                                 },
                                 {
                                     name: exports.EXTERNALS_VOLUME_NAME,
                                     storageName: process.env.EXTERNAL_STORAGE_NAME,
-                                    storageType: 'NfsAzureFile',
-                                    mountOptions: 'vers=4,minorversion=1,sec=sys,nconnect=4'
+                                    storageType: 'AzureFile',
+                                    mountOptions: 'mfsymlinks'
                                 }
                             ]
                         }
