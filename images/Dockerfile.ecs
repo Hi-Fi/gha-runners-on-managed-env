@@ -1,4 +1,28 @@
+FROM golang:1.22.6 as builder
+
+# Make static bundle to work with scratch/distroless
+ENV CGO_ENABLED=0
+
+WORKDIR /build
+
+COPY ./utils/file-executor/go.mod ./
+
+RUN go mod download
+
+COPY utils/file-executor .
+
+ARG TARGETOS=linux TARGETARCH=amd64 TARGETVARIANT=v7
+
+RUN export GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${TARGETVARIANT#v} && \
+  go build -trimpath -v -o /out/executor main.go
+
 FROM ghcr.io/actions/actions-runner:latest as base
+
+# Copy next to other externals so gets copied at same go
+COPY --from=builder /out/executor /home/runner/externals/executor
+
+# Calculate hash of externals to prevent need to copy those every time when using shared location for those
+RUN find /home/runner/externals -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum > /home/runner/externals/externals.sum
 
 COPY ./images/hooks/ecs/index.js /home/runner/ecs/index.js
 

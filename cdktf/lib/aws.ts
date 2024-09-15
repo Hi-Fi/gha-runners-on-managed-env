@@ -3,7 +3,6 @@ import { DataAwsCallerIdentity } from '@cdktf/provider-aws/lib/data-aws-caller-i
 import { DataAwsRegion } from '@cdktf/provider-aws/lib/data-aws-region';
 import { DataAwsSecurityGroups } from '@cdktf/provider-aws/lib/data-aws-security-groups';
 import { DataAwsSubnets } from '@cdktf/provider-aws/lib/data-aws-subnets';
-import { EcrRepository } from '@cdktf/provider-aws/lib/ecr-repository';
 import { EcsCluster } from '@cdktf/provider-aws/lib/ecs-cluster';
 import { EcsService } from '@cdktf/provider-aws/lib/ecs-service';
 import { EcsTaskDefinition } from '@cdktf/provider-aws/lib/ecs-task-definition';
@@ -11,7 +10,7 @@ import { IamPolicy } from '@cdktf/provider-aws/lib/iam-policy';
 import { IamRole } from '@cdktf/provider-aws/lib/iam-role';
 import { IamRolePolicyAttachment } from '@cdktf/provider-aws/lib/iam-role-policy-attachment';
 import { AwsProvider } from '@cdktf/provider-aws/lib/provider';
-import { Fn, TerraformIterator, TerraformStack } from 'cdktf';
+import { CloudBackend, Fn, NamedCloudWorkspace, TerraformIterator, TerraformStack } from 'cdktf';
 import { Construct } from 'constructs';
 import { commonVariables } from './variables';
 import { EfsFileSystem } from '@cdktf/provider-aws/lib/efs-file-system';
@@ -23,6 +22,11 @@ import { EfsMountTarget } from '@cdktf/provider-aws/lib/efs-mount-target';
 export class Aws extends TerraformStack {
     constructor(scope: Construct, id: string) {
         super(scope, id);
+
+        new CloudBackend(this, {
+            organization: 'hi-fi_org',
+            workspaces: new NamedCloudWorkspace(id)
+        })
 
         new AwsProvider(this, 'aws', {
 
@@ -68,28 +72,6 @@ export class Aws extends TerraformStack {
             })
         })
 
-        const resultsEcr = new EcrRepository(this, 'ResultsRepository', {
-            name: 'results'
-        });
-
-        const kanikoRole = new IamRole(this, 'KanikoRole', {
-            assumeRolePolicy: Fn.jsonencode({
-                'Version': '2012-10-17',
-                'Statement': [
-                    {
-                        'Effect': 'Allow',
-                        'Principal': {
-                            'Service': 'ecs-tasks.amazonaws.com'
-                        },
-                        'Action': 'sts:AssumeRole'
-                    }
-                ]
-            }),
-            managedPolicyArns: [
-                'arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilderECRContainerBuilds'
-            ]
-        })
-
         const ecsTaskExecutionRole = new IamRole(this, 'TaskExecutionRole', {
             assumeRolePolicy: Fn.jsonencode({
                 'Version': '2012-10-17',
@@ -112,10 +94,6 @@ export class Aws extends TerraformStack {
             name: '/ecs/GHA',
         });
 
-        const kanikoLogGroup = new CloudwatchLogGroup(this, 'KanikoLogGroup', {
-            name: '/ecs/Kaniko',
-        });
-
         const autoscalerLogGroup = new CloudwatchLogGroup(this, 'AutoscalerLogGroup', {
             name: '/ecs/Autoscaler',
         });
@@ -134,13 +112,14 @@ export class Aws extends TerraformStack {
         // Each subnet in VPC are on different AZs, so creating mountpoint to each
         const iterator = TerraformIterator.fromList(subnets.ids)
 
-        new EfsMountTarget(this, 'MountTarget', {
+        new EfsMountTarget(this, 'EfsMountTarget', {
             forEach: iterator,
             fileSystemId: efs.id,
             subnetId: iterator.value
         });
 
         const runnerVolumeName = 'work';
+        const externalsVolumeName = 'externals';
         const runnerContainerDefinitions: ContainerDefinition[] = [
             {
             name: 'runner',
@@ -185,6 +164,10 @@ export class Aws extends TerraformStack {
                 {
                     sourceVolume: runnerVolumeName,
                     containerPath: '/tmp/_work',
+                },
+                {
+                    sourceVolume: externalsVolumeName,
+                    containerPath: '/tmp/externals',
                 }
             ],
             logConfiguration: {
@@ -196,7 +179,7 @@ export class Aws extends TerraformStack {
                 }
             }
         }]
-        // TODO: Images through caching: https://docs.aws.amazon.com/AmazonECR/latest/userguide/pull-through-cache.html
+        // TODO: Images through caching: https://docs.aws.amazon.com/AmazonECR/latest/userguide/pull-through-cache.html (requires authentication)
         // TODO: Pass Execution role to job task: https://www.ernestchiang.com/en/posts/2021/using-amazon-ecs-exec/#1-grant-permissions-ecs-task-iam-role
         // TODO: Pass Task role to job task
         const runnerTaskDefinition = new EcsTaskDefinition(this, 'RunnerTaskDefinition', {
@@ -285,43 +268,6 @@ export class Aws extends TerraformStack {
             networkMode: 'awsvpc',
         })
 
-        const kanikoTaskDefinition = new EcsTaskDefinition(this, 'KanikoTaskDefinition', {
-            family: 'Kaniko',
-            taskRoleArn: kanikoRole.arn,
-            executionRoleArn: ecsTaskExecutionRole.arn,
-            containerDefinitions: Fn.jsonencode([
-                {
-                    name: 'kaniko',
-                    image: 'gcr.io/kaniko-project/executor:v1.23.0',
-                    essential: true,
-                    command: [
-                        '--dockerfile=images/Dockerfile.gha',
-                        '--context=git://github.com/Hi-Fi/gha-runners-on-managed-env.git',
-                        `--destination=${resultsEcr.repositoryUrl}:latest`,
-                        '--target=nonroot'
-                    ],
-                    logConfiguration: {
-                        logDriver: 'awslogs',
-                        options: {
-                            "awslogs-group": kanikoLogGroup.name,
-                            "awslogs-region": region.name,
-                            "awslogs-stream-prefix": "ecs",
-                        }
-                    }
-                }
-            ]),
-            cpu: '1024',
-            memory: '2048',
-            requiresCompatibilities: [
-                'FARGATE'
-            ],
-            runtimePlatform: {
-                cpuArchitecture: 'X86_64',
-                operatingSystemFamily: 'LINUX'
-            },
-            networkMode: 'awsvpc',
-        })
-
         const runnerPolicy = new IamPolicy(this, 'RunnerPolicy', {
             policy: Fn.jsonencode({
                 'Version': '2012-10-17',
@@ -348,13 +294,10 @@ export class Aws extends TerraformStack {
                         'Resource': [
                             `arn:aws:ecs:${region.name}:${identity.accountId}:task-definition/gha-pod-workflow:*`,
                             cluster.arn,
-                            `${kanikoTaskDefinition.arnWithoutRevision}:*`,
                             // Triggerer has to be allowed to pass both task and task execution role
                             ecsTaskExecutionRole.arn,
-                            kanikoRole.arn,
                             runnerRole.arn,
                             `arn:aws:ecs:${region.name}:${identity.accountId}:task/${cluster.name}/*`,
-                            `${kanikoLogGroup.arn}:log-stream:*`,
                             //TODO: reorder rights so that listing is only one with star
                             '*'
                         ]
