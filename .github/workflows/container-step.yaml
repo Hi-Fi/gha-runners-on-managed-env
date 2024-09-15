@@ -1,5 +1,8 @@
 name: Container step example
 on: 
+  push:
+    branches:
+      - runner_hooks
   workflow_dispatch:
     inputs:
       runner:
@@ -13,7 +16,7 @@ on:
 
 jobs:
   hello_world_job:
-    runs-on: ${{ github.event.inputs.runner }}
+    runs-on: ${{ github.event.inputs.runner || 'ecs-runner-set' }}
     name: A job to say hello
     steps:
       - name: Run the Container Action
@@ -25,3 +28,13 @@ jobs:
       - name: Print Output
         id: output
         run: echo "${{ steps.run.outputs.greeting }}"
+
+      - name: Run the Container Action
+        id: run2
+        uses: actions/container-prebuilt-action@v0
+        with:
+          who-to-greet: Other greeted
+
+      - name: Print Output
+        id: output2
+        run: echo "${{ steps.run2.outputs.greeting }}"

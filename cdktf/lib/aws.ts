@@ -108,6 +108,9 @@ export class Aws extends TerraformStack {
             throughputMode: 'elastic'
         })
 
+        const externalsEfs = new EfsFileSystem(this, 'externalsEfs', {
+            throughputMode: 'elastic'
+        })
 
         // Each subnet in VPC are on different AZs, so creating mountpoint to each
         const iterator = TerraformIterator.fromList(subnets.ids)
@@ -115,6 +118,12 @@ export class Aws extends TerraformStack {
         new EfsMountTarget(this, 'EfsMountTarget', {
             forEach: iterator,
             fileSystemId: efs.id,
+            subnetId: iterator.value
+        });
+
+        new EfsMountTarget(this, 'ExternalsEfsMountTarget', {
+            forEach: iterator,
+            fileSystemId: externalsEfs.id,
             subnetId: iterator.value
         });
 
@@ -130,6 +139,10 @@ export class Aws extends TerraformStack {
                 {
                     name: 'EFS_ID',
                     value: efs.id
+                },
+                {
+                    name: 'EXTERNALS_EFS_ID',
+                    value: externalsEfs.id
                 },
                 {
                     name: 'ECS_CLUSTER_NAME',
@@ -202,6 +215,13 @@ export class Aws extends TerraformStack {
                     name: runnerVolumeName,
                     efsVolumeConfiguration: {
                         fileSystemId: efs.id,
+                    },
+                },
+                // This doesn't work with same volume, as volume is initially empty so it can't map to it's "externals" directory
+                {
+                    name: externalsVolumeName,
+                    efsVolumeConfiguration: {
+                        fileSystemId: externalsEfs.id,
                     }
                 }
             ]

@@ -1,5 +1,8 @@
 name: PostgreSQL service example
-on: 
+on:
+  push:
+    branches:
+      - runner_hooks
   workflow_dispatch:
     inputs:
       runner:
@@ -15,7 +18,7 @@ jobs:
   # Label of the container job
   container-job:
     # Containers must run in Linux based operating systems
-    runs-on: aca-runner-set
+    runs-on: ${{ github.event.inputs.runner || 'ecs-runner-set' }}
     # Docker Hub image that `container-job` executes in
     container: node:22-bookworm
 

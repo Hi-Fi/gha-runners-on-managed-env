@@ -145,8 +145,8 @@ function createTask(jobTaskProperties, services, volumes, _registry) {
                     collectedVolumes === null || collectedVolumes === void 0 ? void 0 : collectedVolumes.push({
                         name: 'externals',
                         efsVolumeConfiguration: {
-                            fileSystemId: process.env.EFS_ID,
-                            rootDirectory: '/externals'
+                            fileSystemId: process.env.EXTERNALS_EFS_ID,
+                            rootDirectory: '/'
                         }
                     });
                     storeTaskDefinitionCommand = new client_ecs_1.RegisterTaskDefinitionCommand({
@@ -30263,8 +30263,8 @@ function createTask(jobTaskProperties, services, volumes, _registry) {
                     collectedVolumes === null || collectedVolumes === void 0 ? void 0 : collectedVolumes.push({
                         name: 'externals',
                         efsVolumeConfiguration: {
-                            fileSystemId: process.env.EFS_ID,
-                            rootDirectory: '/externals'
+                            fileSystemId: process.env.EXTERNALS_EFS_ID,
+                            rootDirectory: '/'
                         }
                     });
                     storeTaskDefinitionCommand = new client_ecs_1.RegisterTaskDefinitionCommand({
