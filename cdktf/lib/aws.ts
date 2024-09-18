@@ -105,11 +105,17 @@ export class Aws extends TerraformStack {
 
         // EFS volume to allow sharing data between tasks
         const efs = new EfsFileSystem(this, 'efs', {
-            throughputMode: 'elastic'
+            throughputMode: 'elastic',
+            tags: {
+                Name: 'work'
+            }
         })
 
         const externalsEfs = new EfsFileSystem(this, 'externalsEfs', {
-            throughputMode: 'elastic'
+            throughputMode: 'elastic',
+            tags: {
+                Name: 'externals'
+            }
         })
 
         // Each subnet in VPC are on different AZs, so creating mountpoint to each
@@ -133,7 +139,7 @@ export class Aws extends TerraformStack {
             {
             name: 'runner',
             image: 'ghcr.io/hi-fi/actions-runner:ecs',
-            command: ['/bin/sh', '-c', 'export EXECID=$(cat /proc/sys/kernel/random/uuid) && sudo mkdir -p /tmp/_work/$EXECID && sudo chown runner:runner /tmp/_work/$EXECID && ln -s /tmp/_work/$EXECID _work && /home/runner/run.sh ; sudo rm -r /tmp/_work/$EXECID'],
+            command: ['/bin/sh', '-c', 'export EXECID=$(cat /proc/sys/kernel/random/uuid) && sudo mkdir -p /tmp/_work/$EXECID && sudo chown runner:runner /tmp/_work/$EXECID && ln -s /tmp/_work/$EXECID _work && sudo chown runner:runner /tmp/externals && /home/runner/run.sh ; sudo rm -r /tmp/_work/$EXECID'],
             essential: true,
             environment: [
                 {
@@ -310,6 +316,8 @@ export class Aws extends TerraformStack {
                             'ecs:DescribeTasks',
                             'logs:GetLogEvents',
                             'iam:PassRole',
+                            'logs:StartLiveTail',
+                            'logs:CreateLogStream',
                         ],
                         'Resource': [
                             `arn:aws:ecs:${region.name}:${identity.accountId}:task-definition/gha-pod-workflow:*`,

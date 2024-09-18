@@ -65,9 +65,16 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
+var __asyncValues = (this && this.__asyncValues) || function (o) {
+    if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
+    var m = o[Symbol.asyncIterator], i;
+    return m ? m.call(o) : (o = typeof __values === "function" ? __values(o) : o[Symbol.iterator](), i = {}, verb("next"), verb("throw"), verb("return"), i[Symbol.asyncIterator] = function () { return this; }, i);
+    function verb(n) { i[n] = o[n] && function (v) { return new Promise(function (resolve, reject) { v = o[n](v), settle(resolve, reject, v.done, v.value); }); }; }
+    function settle(resolve, reject, d, v) { Promise.resolve(v).then(function(v) { resolve({ value: v, done: d }); }, reject); }
+};
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.createJob = exports.EXTERNALS_VOLUME_NAME = exports.POD_VOLUME_NAME = void 0;
+exports.pruneTask = exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.createJob = exports.EXTERNALS_VOLUME_NAME = exports.POD_VOLUME_NAME = void 0;
 var core = __importStar(__nccwpck_require__(2186));
 var arm_appcontainers_1 = __nccwpck_require__(223);
 var identity_1 = __nccwpck_require__(3084);
@@ -79,10 +86,11 @@ var DEFAULT_WAIT_FOR_POD_TIME_SECONDS = 10 * 60; // 10 min
 exports.POD_VOLUME_NAME = 'work';
 exports.EXTERNALS_VOLUME_NAME = 'externals';
 function createJob(jobTaskProperties, services) {
+    var _a;
     return __awaiter(this, void 0, void 0, function () {
         var containers, jobEnvelope, job, execution;
-        return __generator(this, function (_a) {
-            switch (_a.label) {
+        return __generator(this, function (_b) {
+            switch (_b.label) {
                 case 0:
                     containers = [];
                     if (jobTaskProperties) {
@@ -119,15 +127,18 @@ function createJob(jobTaskProperties, services) {
                                     mountOptions: 'mfsymlinks'
                                 }
                             ]
+                        },
+                        tags: {
+                            startedBy: (_a = process.env.GITHUB_RUN_ID) !== null && _a !== void 0 ? _a : ''
                         }
                     };
                     core.debug(JSON.stringify(jobEnvelope));
                     return [4 /*yield*/, acaClient.jobs.beginCreateOrUpdateAndWait(process.env.RG_NAME, "job-task-".concat(Date.now()), jobEnvelope)];
                 case 1:
-                    job = _a.sent();
+                    job = _b.sent();
                     return [4 /*yield*/, acaClient.jobs.beginStartAndWait(process.env.RG_NAME, job.name)];
                 case 2:
-                    execution = _a.sent();
+                    execution = _b.sent();
                     if (!execution.id) {
                         throw new Error('No job execution creted');
                     }
@@ -157,61 +168,6 @@ function execTaskStep(command, _taskArn, _containerName) {
     });
 }
 exports.execTaskStep = execTaskStep;
-// export async function waitForJobToComplete(jobName: string): Promise<void> {
-//   const backOffManager = new BackOffManager()
-//   while (true) {
-//     try {
-//       if (await isTaskSucceeded(jobName)) {
-//         return
-//       }
-//     } catch (error) {
-//       throw new Error(`job ${jobName} has failed`)
-//     }
-//     await backOffManager.backOff()
-//   }
-// }
-// export async function waitForTaskRunning(
-//   taskArn: string,
-//   maxTimeSeconds = DEFAULT_WAIT_FOR_POD_TIME_SECONDS
-// ): Promise<void> {
-//   const results = await waitUntilTasksRunning({
-//     client: ecsClient,
-//     maxWaitTime: maxTimeSeconds,
-//   }, {
-//     tasks: [
-//       taskArn
-//     ],
-//     cluster
-//   });
-//   if (results.state != "SUCCESS") {
-//     throw new Error(`Task ${taskArn} is unhealthy with phase status ${results.state} and reason ${results.reason}`)
-//   }
-// }
-// export async function waitForTaskStopped(
-//   taskArn: string,
-//   maxTimeSeconds = DEFAULT_WAIT_FOR_POD_TIME_SECONDS
-// ): Promise<void> {
-//   const results = await waitUntilTasksStopped({
-//     client: ecsClient,
-//     maxWaitTime: maxTimeSeconds,
-//   }, {
-//     tasks: [
-//       taskArn
-//     ],
-//     cluster
-//   });
-//   const stoppedTask = await ecsClient.send(new DescribeTasksCommand({
-//     tasks: [
-//       taskArn
-//     ],
-//     cluster
-//   }));
-//   core.debug(`Step stop code: ${stoppedTask.tasks?.[0].stopCode}`)
-//   core.debug(`Step reason code: ${stoppedTask.tasks?.[0].stoppedReason}`)
-//   if (stoppedTask.tasks?.[0].stoppedReason?.includes('Error')) {
-//     throw new Error(stoppedTask.tasks?.[0].stoppedReason);
-//   }
-// }
 function getPrepareJobTimeoutSeconds() {
     var envTimeoutSeconds = process.env['ACTIONS_RUNNER_PREPARE_JOB_TIMEOUT_SECONDS'];
     if (!envTimeoutSeconds) {
@@ -225,16 +181,6 @@ function getPrepareJobTimeoutSeconds() {
     return timeoutSeconds;
 }
 exports.getPrepareJobTimeoutSeconds = getPrepareJobTimeoutSeconds;
-// async function isTaskSucceeded(taskArn: string): Promise<boolean> {
-//   const command = new DescribeTasksCommand({
-//     tasks: [
-//       taskArn
-//     ],
-//     cluster
-//   });
-//   const response = await ecsClient.send(command);
-//   return response.failures?.length === 0;
-// }
 function isTaskContainerAlpine(taskArn, containerName) {
     return __awaiter(this, void 0, void 0, function () {
         var output;
@@ -253,101 +199,64 @@ function isTaskContainerAlpine(taskArn, containerName) {
     });
 }
 exports.isTaskContainerAlpine = isTaskContainerAlpine;
-var BackOffManager = /** @class */ (function () {
-    function BackOffManager(throwAfterSeconds) {
-        this.throwAfterSeconds = throwAfterSeconds;
-        this.backOffSeconds = 1;
-        this.totalTime = 0;
-        if (!throwAfterSeconds || throwAfterSeconds < 0) {
-            this.throwAfterSeconds = undefined;
-        }
-    }
-    BackOffManager.prototype.backOff = function () {
-        return __awaiter(this, void 0, void 0, function () {
-            var _this = this;
-            return __generator(this, function (_a) {
-                switch (_a.label) {
-                    case 0: return [4 /*yield*/, new Promise(function (resolve) {
-                            return setTimeout(resolve, _this.backOffSeconds * 1000);
-                        })];
-                    case 1:
-                        _a.sent();
-                        this.totalTime += this.backOffSeconds;
-                        if (this.throwAfterSeconds && this.throwAfterSeconds < this.totalTime) {
-                            throw new Error('backoff timeout');
+function pruneTask() {
+    var _a, e_1, _b, _c;
+    var _d;
+    return __awaiter(this, void 0, void 0, function () {
+        var startedBy, resourceGroup, jobs, prunes, _e, jobs_1, jobs_1_1, job, e_1_1;
+        return __generator(this, function (_f) {
+            switch (_f.label) {
+                case 0:
+                    startedBy = process.env.GITHUB_RUN_ID;
+                    resourceGroup = process.env.RG_NAME;
+                    core.debug("Obtaining jobs with tag startedBy: ".concat(startedBy));
+                    jobs = acaClient.jobs.listByResourceGroup(process.env.RG_NAME);
+                    prunes = [];
+                    _f.label = 1;
+                case 1:
+                    _f.trys.push([1, 6, 7, 12]);
+                    _e = true, jobs_1 = __asyncValues(jobs);
+                    _f.label = 2;
+                case 2: return [4 /*yield*/, jobs_1.next()];
+                case 3:
+                    if (!(jobs_1_1 = _f.sent(), _a = jobs_1_1.done, !_a)) return [3 /*break*/, 5];
+                    _c = jobs_1_1.value;
+                    _e = false;
+                    try {
+                        job = _c;
+                        if (((_d = job.tags) === null || _d === void 0 ? void 0 : _d.startedBy) === startedBy && job.name) {
+                            core.debug("Deleting job ".concat(job.name));
+                            prunes.push(acaClient.jobs.beginDelete(resourceGroup, job.name));
                         }
-                        if (this.backOffSeconds < 20) {
-                            this.backOffSeconds *= 2;
-                        }
-                        if (this.backOffSeconds > 20) {
-                            this.backOffSeconds = 20;
-                        }
-                        return [2 /*return*/];
-                }
-            });
+                    }
+                    finally {
+                        _e = true;
+                    }
+                    _f.label = 4;
+                case 4: return [3 /*break*/, 2];
+                case 5: return [3 /*break*/, 12];
+                case 6:
+                    e_1_1 = _f.sent();
+                    e_1 = { error: e_1_1 };
+                    return [3 /*break*/, 12];
+                case 7:
+                    _f.trys.push([7, , 10, 11]);
+                    if (!(!_e && !_a && (_b = jobs_1.return))) return [3 /*break*/, 9];
+                    return [4 /*yield*/, _b.call(jobs_1)];
+                case 8:
+                    _f.sent();
+                    _f.label = 9;
+                case 9: return [3 /*break*/, 11];
+                case 10:
+                    if (e_1) throw e_1.error;
+                    return [7 /*endfinally*/];
+                case 11: return [7 /*endfinally*/];
+                case 12: return [2 /*return*/];
+            }
         });
-    };
-    return BackOffManager;
-}());
-// export function containerPorts(
-//   container: ContainerInfo
-// ): PortMapping[] {
-//   const ports: PortMapping[] = []
-//   if (!container.portMappings?.length) {
-//     return ports
-//   }
-//   for (const portDefinition of container.portMappings) {
-//     const portProtoSplit = portDefinition.split('/')
-//     if (portProtoSplit.length > 2) {
-//       throw new Error(`Unexpected port format: ${portDefinition}`)
-//     }
-//     const port: PortMapping = {
-//       protocol: portProtoSplit.length === 2 ? portProtoSplit[1].toUpperCase() : 'TCP',
-//     }
-//     const portSplit = portProtoSplit[0].split(':')
-//     if (portSplit.length > 2) {
-//       throw new Error('ports should have at most one ":" separator')
-//     }
-//     const parsePort = (p: string): number => {
-//       const num = Number(p)
-//       if (!Number.isInteger(num) || num < 1 || num > 65535) {
-//         throw new Error(`invalid container port: ${p}`)
-//       }
-//       return num
-//     }
-//     if (portSplit.length === 1) {
-//       port.containerPort = parsePort(portSplit[0])
-//     } else {
-//       port.hostPort = parsePort(portSplit[0])
-//       port.containerPort = parsePort(portSplit[1])
-//     }
-//     ports.push(port)
-//   }
-//   return ports
-// }
-// export async function pruneTask(): Promise<void> {
-//   const startedBy = process.env.GITHUB_RUN_ID;
-//   core.debug(`Obtaining tasks started by ${startedBy}`)
-//   const getTaskCommand = new ListTasksCommand({
-//     cluster,
-//     startedBy,
-//   });
-//   const tasks = await ecsClient.send(getTaskCommand);
-//   core.debug(`Obtained tasks ${tasks.taskArns?.join(', ')}`)
-//   await Promise.all(tasks.taskArns?.map(async taskArn => {
-//     const stopTaskCommand = new StopTaskCommand({
-//       task: taskArn,
-//       cluster,
-//       reason: 'Pruning tasks'
-//     })
-//     core.debug(`Stopping task ${taskArn}`)
-//     try {
-//       return ecsClient.send(stopTaskCommand)
-//     } catch (e: any) {
-//       core.warning(`failed to stop task ${taskArn}. Reason: ${e}`)
-//     }
-//   }) || [])
-// }
+    });
+}
+exports.pruneTask = pruneTask;
 
 
 /***/ }),
@@ -653,7 +562,7 @@ exports.fixArgs = fixArgs;
 /***/ }),
 
 /***/ 876:
-/***/ (function(__unused_webpack_module, exports) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -695,10 +604,11 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.cleanupJob = void 0;
+var aca_1 = __nccwpck_require__(6691);
 function cleanupJob() {
     return __awaiter(this, void 0, void 0, function () {
         return __generator(this, function (_a) {
-            console.log("cleanup not implemented");
+            (0, aca_1.pruneTask)();
             return [2 /*return*/];
         });
     });
@@ -904,7 +814,6 @@ function prepareJob(args, responseFile) {
                     if (!args.container) {
                         throw new Error('Job Container is required.');
                     }
-                    //await prunePods()
                     core.debug("copying externals");
                     return [4 /*yield*/, copyExternalsToRoot()];
                 case 1:
@@ -929,36 +838,39 @@ function prepareJob(args, responseFile) {
                     createdJob = undefined;
                     _g.label = 2;
                 case 2:
-                    _g.trys.push([2, 4, , 5]);
+                    _g.trys.push([2, 4, , 6]);
                     return [4 /*yield*/, (0, aca_1.createJob)(containerDefinition, services)];
                 case 3:
                     createdJob = _g.sent();
-                    return [3 /*break*/, 5];
+                    return [3 /*break*/, 6];
                 case 4:
                     err_1 = _g.sent();
                     core.debug("createTask failed: ".concat(JSON.stringify(err_1)));
                     message = ((_d = (_c = err_1 === null || err_1 === void 0 ? void 0 : err_1.response) === null || _c === void 0 ? void 0 : _c.body) === null || _d === void 0 ? void 0 : _d.message) || err_1;
-                    throw new Error("failed to create job task: ".concat(message));
+                    return [4 /*yield*/, (0, aca_1.pruneTask)()];
                 case 5:
+                    _g.sent();
+                    throw new Error("failed to create job task: ".concat(message));
+                case 6:
                     if (!(createdJob === null || createdJob === void 0 ? void 0 : createdJob.execution.id)) {
                         throw new Error('created task should have ID');
                     }
                     core.debug("Job task created, waiting for it to come online ".concat(createdJob.execution.id));
                     core.debug('Job task is ready for traffic');
                     isAlpine = false;
-                    _g.label = 6;
-                case 6:
-                    _g.trys.push([6, 8, , 9]);
-                    return [4 /*yield*/, (0, aca_1.isTaskContainerAlpine)(createdJob.execution.id, constants_1.JOB_CONTAINER_NAME)];
+                    _g.label = 7;
                 case 7:
-                    isAlpine = _g.sent();
-                    return [3 /*break*/, 9];
+                    _g.trys.push([7, 9, , 10]);
+                    return [4 /*yield*/, (0, aca_1.isTaskContainerAlpine)(createdJob.execution.id, constants_1.JOB_CONTAINER_NAME)];
                 case 8:
+                    isAlpine = _g.sent();
+                    return [3 /*break*/, 10];
+                case 9:
                     err_2 = _g.sent();
                     core.debug("Failed to determine if the task is alpine: ".concat(JSON.stringify(err_2)));
                     message = ((_f = (_e = err_2 === null || err_2 === void 0 ? void 0 : err_2.response) === null || _e === void 0 ? void 0 : _e.body) === null || _f === void 0 ? void 0 : _f.message) || err_2;
                     throw new Error("failed to determine if the task is alpine: ".concat(message));
-                case 9:
+                case 10:
                     core.debug("Setting isAlpine to ".concat(isAlpine));
                     // generateResponseFile(responseFile, createdJob, isAlpine)
                     generateResponseFile(responseFile, createdJob, isAlpine);
@@ -998,6 +910,9 @@ function generateResponseFile(responseFile, job, isAlpine) {
     }
     (0, hooklib_1.writeToResponseFile)(responseFile, JSON.stringify(response));
 }
+/**
+ * Copies externals from runner to shared volume usable by tasks. Target directory /tmp/externals is mapped in runner creation in autoscaler app
+ */
 function copyExternalsToRoot() {
     return __awaiter(this, void 0, void 0, function () {
         var workspace;
@@ -1146,33 +1061,24 @@ function runContainerStep(stepContainer) {
                     createdTask = undefined;
                     _c.label = 1;
                 case 1:
-                    _c.trys.push([1, 3, , 4]);
+                    _c.trys.push([1, 3, , 5]);
                     return [4 /*yield*/, (0, aca_1.createJob)(container, undefined)];
                 case 2:
                     createdTask = _c.sent();
-                    return [3 /*break*/, 4];
+                    return [3 /*break*/, 5];
                 case 3:
                     err_1 = _c.sent();
                     core.debug("createTask failed: ".concat(JSON.stringify(err_1)));
                     message = ((_b = (_a = err_1 === null || err_1 === void 0 ? void 0 : err_1.response) === null || _a === void 0 ? void 0 : _a.body) === null || _b === void 0 ? void 0 : _b.message) || err_1;
-                    throw new Error("failed to create job task: ".concat(message));
+                    return [4 /*yield*/, (0, aca_1.pruneTask)()];
                 case 4:
+                    _c.sent();
+                    throw new Error("failed to create job task: ".concat(message));
+                case 5:
                     if (!(createdTask === null || createdTask === void 0 ? void 0 : createdTask.execution.id)) {
                         throw new Error('created task should have ID');
                     }
                     core.debug("Job task created, waiting for it to come online ".concat(createdTask.execution.id));
-                    // try {
-                    //   await waitForTaskRunning(
-                    //     createdTask.taskArn,
-                    //     getPrepareJobTimeoutSeconds()
-                    //   )
-                    // } catch (err) {
-                    //   await pruneTask()
-                    //   throw new Error(`task failed to come online with error: ${err}`)
-                    // }
-                    // await waitForTaskStopped(
-                    //   createdTask.taskArn,
-                    // )
                     return [2 /*return*/, 0];
             }
         });
@@ -1198,37 +1104,6 @@ function createContainerDefinition(container) {
         },
         volumeMounts: volumeMounts
     };
-    // const podContainer = new k8s.V1Container()
-    // podContainer.name = JOB_CONTAINER_NAME
-    // podContainer.image = container.image
-    // podContainer.workingDir = container.workingDirectory
-    // podContainer.command = container.entryPoint
-    //   ? [container.entryPoint]
-    //   : undefined
-    // podContainer.args = container.entryPointArgs?.length
-    //   ? fixArgs(container.entryPointArgs)
-    //   : undefined
-    // if (secretName) {
-    //   podContainer.envFrom = [
-    //     {
-    //       secretRef: {
-    //         name: secretName,
-    //         optional: false
-    //       }
-    //     }
-    //   ]
-    // }
-    // podContainer.volumeMounts = containerVolumes(undefined, false, true)
-    // if (!extension) {
-    //   return podContainer
-    // }
-    // const from = extension.spec?.containers?.find(
-    //   c => c.name === JOB_CONTAINER_EXTENSION_NAME
-    // )
-    // if (from) {
-    //   mergeContainerWithOptions(podContainer, from)
-    // }
-    // return podContainer
 }
 
 
@@ -1304,9 +1179,9 @@ exports.runScriptStep = void 0;
 var fs = __importStar(__nccwpck_require__(7147));
 var utils_1 = __nccwpck_require__(9297);
 var watcher_1 = __nccwpck_require__(9266);
-function runScriptStep(args, state, responseFile) {
+function runScriptStep(args, _tate, _responseFile) {
     return __awaiter(this, void 0, void 0, function () {
-        var entryPoint, entryPointArgs, environmentVariables, _a, runnerPath, jobId, response, rc;
+        var entryPoint, entryPointArgs, environmentVariables, _a, runnerPath, jobId, rc;
         return __generator(this, function (_b) {
             switch (_b.label) {
                 case 0:
@@ -1314,11 +1189,8 @@ function runScriptStep(args, state, responseFile) {
                     _a = (0, utils_1.writeEntryPointScript)(args.workingDirectory, entryPoint, entryPointArgs, args.prependPath, environmentVariables), runnerPath = _a.runnerPath, jobId = _a.jobId;
                     return [4 /*yield*/, (0, watcher_1.waitForJobCompletion)(jobId)];
                 case 1:
-                    response = _b.sent();
-                    fs.rmSync(runnerPath);
-                    return [4 /*yield*/, (0, watcher_1.waitForJobCompletion)(jobId)];
-                case 2:
                     rc = _b.sent();
+                    fs.rmSync(runnerPath);
                     if (rc.trim() != "0") {
                         throw new Error('execPodStep failed');
                     }
@@ -33065,9 +32937,16 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
+var __asyncValues = (this && this.__asyncValues) || function (o) {
+    if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
+    var m = o[Symbol.asyncIterator], i;
+    return m ? m.call(o) : (o = typeof __values === "function" ? __values(o) : o[Symbol.iterator](), i = {}, verb("next"), verb("throw"), verb("return"), i[Symbol.asyncIterator] = function () { return this; }, i);
+    function verb(n) { i[n] = o[n] && function (v) { return new Promise(function (resolve, reject) { v = o[n](v), settle(resolve, reject, v.done, v.value); }); }; }
+    function settle(resolve, reject, d, v) { Promise.resolve(v).then(function(v) { resolve({ value: v, done: d }); }, reject); }
+};
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.createJob = exports.EXTERNALS_VOLUME_NAME = exports.POD_VOLUME_NAME = void 0;
+exports.pruneTask = exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.createJob = exports.EXTERNALS_VOLUME_NAME = exports.POD_VOLUME_NAME = void 0;
 var core = __importStar(__nccwpck_require__(2186));
 var arm_appcontainers_1 = __nccwpck_require__(223);
 var identity_1 = __nccwpck_require__(3084);
@@ -33079,10 +32958,11 @@ var DEFAULT_WAIT_FOR_POD_TIME_SECONDS = 10 * 60; // 10 min
 exports.POD_VOLUME_NAME = 'work';
 exports.EXTERNALS_VOLUME_NAME = 'externals';
 function createJob(jobTaskProperties, services) {
+    var _a;
     return __awaiter(this, void 0, void 0, function () {
         var containers, jobEnvelope, job, execution;
-        return __generator(this, function (_a) {
-            switch (_a.label) {
+        return __generator(this, function (_b) {
+            switch (_b.label) {
                 case 0:
                     containers = [];
                     if (jobTaskProperties) {
@@ -33119,15 +32999,18 @@ function createJob(jobTaskProperties, services) {
                                     mountOptions: 'mfsymlinks'
                                 }
                             ]
+                        },
+                        tags: {
+                            startedBy: (_a = process.env.GITHUB_RUN_ID) !== null && _a !== void 0 ? _a : ''
                         }
                     };
                     core.debug(JSON.stringify(jobEnvelope));
                     return [4 /*yield*/, acaClient.jobs.beginCreateOrUpdateAndWait(process.env.RG_NAME, "job-task-".concat(Date.now()), jobEnvelope)];
                 case 1:
-                    job = _a.sent();
+                    job = _b.sent();
                     return [4 /*yield*/, acaClient.jobs.beginStartAndWait(process.env.RG_NAME, job.name)];
                 case 2:
-                    execution = _a.sent();
+                    execution = _b.sent();
                     if (!execution.id) {
                         throw new Error('No job execution creted');
                     }
@@ -33157,61 +33040,6 @@ function execTaskStep(command, _taskArn, _containerName) {
     });
 }
 exports.execTaskStep = execTaskStep;
-// export async function waitForJobToComplete(jobName: string): Promise<void> {
-//   const backOffManager = new BackOffManager()
-//   while (true) {
-//     try {
-//       if (await isTaskSucceeded(jobName)) {
-//         return
-//       }
-//     } catch (error) {
-//       throw new Error(`job ${jobName} has failed`)
-//     }
-//     await backOffManager.backOff()
-//   }
-// }
-// export async function waitForTaskRunning(
-//   taskArn: string,
-//   maxTimeSeconds = DEFAULT_WAIT_FOR_POD_TIME_SECONDS
-// ): Promise<void> {
-//   const results = await waitUntilTasksRunning({
-//     client: ecsClient,
-//     maxWaitTime: maxTimeSeconds,
-//   }, {
-//     tasks: [
-//       taskArn
-//     ],
-//     cluster
-//   });
-//   if (results.state != "SUCCESS") {
-//     throw new Error(`Task ${taskArn} is unhealthy with phase status ${results.state} and reason ${results.reason}`)
-//   }
-// }
-// export async function waitForTaskStopped(
-//   taskArn: string,
-//   maxTimeSeconds = DEFAULT_WAIT_FOR_POD_TIME_SECONDS
-// ): Promise<void> {
-//   const results = await waitUntilTasksStopped({
-//     client: ecsClient,
-//     maxWaitTime: maxTimeSeconds,
-//   }, {
-//     tasks: [
-//       taskArn
-//     ],
-//     cluster
-//   });
-//   const stoppedTask = await ecsClient.send(new DescribeTasksCommand({
-//     tasks: [
-//       taskArn
-//     ],
-//     cluster
-//   }));
-//   core.debug(`Step stop code: ${stoppedTask.tasks?.[0].stopCode}`)
-//   core.debug(`Step reason code: ${stoppedTask.tasks?.[0].stoppedReason}`)
-//   if (stoppedTask.tasks?.[0].stoppedReason?.includes('Error')) {
-//     throw new Error(stoppedTask.tasks?.[0].stoppedReason);
-//   }
-// }
 function getPrepareJobTimeoutSeconds() {
     var envTimeoutSeconds = process.env['ACTIONS_RUNNER_PREPARE_JOB_TIMEOUT_SECONDS'];
     if (!envTimeoutSeconds) {
@@ -33225,16 +33053,6 @@ function getPrepareJobTimeoutSeconds() {
     return timeoutSeconds;
 }
 exports.getPrepareJobTimeoutSeconds = getPrepareJobTimeoutSeconds;
-// async function isTaskSucceeded(taskArn: string): Promise<boolean> {
-//   const command = new DescribeTasksCommand({
-//     tasks: [
-//       taskArn
-//     ],
-//     cluster
-//   });
-//   const response = await ecsClient.send(command);
-//   return response.failures?.length === 0;
-// }
 function isTaskContainerAlpine(taskArn, containerName) {
     return __awaiter(this, void 0, void 0, function () {
         var output;
@@ -33253,101 +33071,64 @@ function isTaskContainerAlpine(taskArn, containerName) {
     });
 }
 exports.isTaskContainerAlpine = isTaskContainerAlpine;
-var BackOffManager = /** @class */ (function () {
-    function BackOffManager(throwAfterSeconds) {
-        this.throwAfterSeconds = throwAfterSeconds;
-        this.backOffSeconds = 1;
-        this.totalTime = 0;
-        if (!throwAfterSeconds || throwAfterSeconds < 0) {
-            this.throwAfterSeconds = undefined;
-        }
-    }
-    BackOffManager.prototype.backOff = function () {
-        return __awaiter(this, void 0, void 0, function () {
-            var _this = this;
-            return __generator(this, function (_a) {
-                switch (_a.label) {
-                    case 0: return [4 /*yield*/, new Promise(function (resolve) {
-                            return setTimeout(resolve, _this.backOffSeconds * 1000);
-                        })];
-                    case 1:
-                        _a.sent();
-                        this.totalTime += this.backOffSeconds;
-                        if (this.throwAfterSeconds && this.throwAfterSeconds < this.totalTime) {
-                            throw new Error('backoff timeout');
+function pruneTask() {
+    var _a, e_1, _b, _c;
+    var _d;
+    return __awaiter(this, void 0, void 0, function () {
+        var startedBy, resourceGroup, jobs, prunes, _e, jobs_1, jobs_1_1, job, e_1_1;
+        return __generator(this, function (_f) {
+            switch (_f.label) {
+                case 0:
+                    startedBy = process.env.GITHUB_RUN_ID;
+                    resourceGroup = process.env.RG_NAME;
+                    core.debug("Obtaining jobs with tag startedBy: ".concat(startedBy));
+                    jobs = acaClient.jobs.listByResourceGroup(process.env.RG_NAME);
+                    prunes = [];
+                    _f.label = 1;
+                case 1:
+                    _f.trys.push([1, 6, 7, 12]);
+                    _e = true, jobs_1 = __asyncValues(jobs);
+                    _f.label = 2;
+                case 2: return [4 /*yield*/, jobs_1.next()];
+                case 3:
+                    if (!(jobs_1_1 = _f.sent(), _a = jobs_1_1.done, !_a)) return [3 /*break*/, 5];
+                    _c = jobs_1_1.value;
+                    _e = false;
+                    try {
+                        job = _c;
+                        if (((_d = job.tags) === null || _d === void 0 ? void 0 : _d.startedBy) === startedBy && job.name) {
+                            core.debug("Deleting job ".concat(job.name));
+                            prunes.push(acaClient.jobs.beginDelete(resourceGroup, job.name));
                         }
-                        if (this.backOffSeconds < 20) {
-                            this.backOffSeconds *= 2;
-                        }
-                        if (this.backOffSeconds > 20) {
-                            this.backOffSeconds = 20;
-                        }
-                        return [2 /*return*/];
-                }
-            });
+                    }
+                    finally {
+                        _e = true;
+                    }
+                    _f.label = 4;
+                case 4: return [3 /*break*/, 2];
+                case 5: return [3 /*break*/, 12];
+                case 6:
+                    e_1_1 = _f.sent();
+                    e_1 = { error: e_1_1 };
+                    return [3 /*break*/, 12];
+                case 7:
+                    _f.trys.push([7, , 10, 11]);
+                    if (!(!_e && !_a && (_b = jobs_1.return))) return [3 /*break*/, 9];
+                    return [4 /*yield*/, _b.call(jobs_1)];
+                case 8:
+                    _f.sent();
+                    _f.label = 9;
+                case 9: return [3 /*break*/, 11];
+                case 10:
+                    if (e_1) throw e_1.error;
+                    return [7 /*endfinally*/];
+                case 11: return [7 /*endfinally*/];
+                case 12: return [2 /*return*/];
+            }
         });
-    };
-    return BackOffManager;
-}());
-// export function containerPorts(
-//   container: ContainerInfo
-// ): PortMapping[] {
-//   const ports: PortMapping[] = []
-//   if (!container.portMappings?.length) {
-//     return ports
-//   }
-//   for (const portDefinition of container.portMappings) {
-//     const portProtoSplit = portDefinition.split('/')
-//     if (portProtoSplit.length > 2) {
-//       throw new Error(`Unexpected port format: ${portDefinition}`)
-//     }
-//     const port: PortMapping = {
-//       protocol: portProtoSplit.length === 2 ? portProtoSplit[1].toUpperCase() : 'TCP',
-//     }
-//     const portSplit = portProtoSplit[0].split(':')
-//     if (portSplit.length > 2) {
-//       throw new Error('ports should have at most one ":" separator')
-//     }
-//     const parsePort = (p: string): number => {
-//       const num = Number(p)
-//       if (!Number.isInteger(num) || num < 1 || num > 65535) {
-//         throw new Error(`invalid container port: ${p}`)
-//       }
-//       return num
-//     }
-//     if (portSplit.length === 1) {
-//       port.containerPort = parsePort(portSplit[0])
-//     } else {
-//       port.hostPort = parsePort(portSplit[0])
-//       port.containerPort = parsePort(portSplit[1])
-//     }
-//     ports.push(port)
-//   }
-//   return ports
-// }
-// export async function pruneTask(): Promise<void> {
-//   const startedBy = process.env.GITHUB_RUN_ID;
-//   core.debug(`Obtaining tasks started by ${startedBy}`)
-//   const getTaskCommand = new ListTasksCommand({
-//     cluster,
-//     startedBy,
-//   });
-//   const tasks = await ecsClient.send(getTaskCommand);
-//   core.debug(`Obtained tasks ${tasks.taskArns?.join(', ')}`)
-//   await Promise.all(tasks.taskArns?.map(async taskArn => {
-//     const stopTaskCommand = new StopTaskCommand({
-//       task: taskArn,
-//       cluster,
-//       reason: 'Pruning tasks'
-//     })
-//     core.debug(`Stopping task ${taskArn}`)
-//     try {
-//       return ecsClient.send(stopTaskCommand)
-//     } catch (e: any) {
-//       core.warning(`failed to stop task ${taskArn}. Reason: ${e}`)
-//     }
-//   }) || [])
-// }
+    });
+}
+exports.pruneTask = pruneTask;
 
 
 /***/ }),
