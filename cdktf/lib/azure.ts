@@ -474,7 +474,8 @@ export class Azure extends TerraformStack {
                         'microsoft.app/jobs/read',
                         'microsoft.app/jobs/write',
                         'microsoft.app/jobs/executions/read',
-                        'microsoft.App/managedEnvironments/join/action'
+                        'microsoft.app/managedEnvironments/join/action',
+                        'microsoft.app/jobs/delete' // cleanup for jobs
                     ],
                 }
             ]

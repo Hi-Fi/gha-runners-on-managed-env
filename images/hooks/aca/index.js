@@ -74,7 +74,7 @@ var __asyncValues = (this && this.__asyncValues) || function (o) {
 };
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.pruneTask = exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.createJob = exports.EXTERNALS_VOLUME_NAME = exports.POD_VOLUME_NAME = void 0;
+exports.removeTemporaryJob = exports.pruneTask = exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.waitJobToStop = exports.createJob = exports.EXTERNALS_VOLUME_NAME = exports.POD_VOLUME_NAME = void 0;
 var core = __importStar(__nccwpck_require__(2186));
 var arm_appcontainers_1 = __nccwpck_require__(223);
 var identity_1 = __nccwpck_require__(3084);
@@ -151,6 +151,46 @@ function createJob(jobTaskProperties, services) {
     });
 }
 exports.createJob = createJob;
+/**
+ * Wait for execution to stop. Polls job status for each 10 seconds.
+ * @param resourceGroupName Resource group containing the waited job
+ * @param jobName Name of the waited job
+ * @param jobExecutionName Execution to wait for
+ * @returns true if execution completed successfully, or false if there was an error.
+ */
+function waitJobToStop(resourceGroupName, jobName, jobExecutionName) {
+    return __awaiter(this, void 0, void 0, function () {
+        var finalStates;
+        var _this = this;
+        return __generator(this, function (_a) {
+            finalStates = [
+                arm_appcontainers_1.KnownJobExecutionRunningState.Failed,
+                arm_appcontainers_1.KnownJobExecutionRunningState.Stopped,
+                arm_appcontainers_1.KnownJobExecutionRunningState.Succeeded,
+            ].map(function (state) { return state.toString(); });
+            return [2 /*return*/, new Promise(function (resolve) {
+                    var timer = setInterval(function () { return __awaiter(_this, void 0, void 0, function () {
+                        var execution;
+                        return __generator(this, function (_a) {
+                            switch (_a.label) {
+                                case 0: return [4 /*yield*/, acaClient.jobExecution(resourceGroupName, jobName, jobExecutionName)];
+                                case 1:
+                                    execution = _a.sent();
+                                    core.debug("Execution ".concat(execution.id, " (name: ").concat(execution.name, ") has now status ").concat(execution.status, ". End time is set to ").concat(execution.endTime));
+                                    if (execution.endTime || (execution.status && finalStates.includes(execution.status))) {
+                                        core.debug("Execution ".concat(jobExecutionName, " ended with status ").concat(execution.status));
+                                        clearInterval(timer);
+                                        resolve(execution.status === arm_appcontainers_1.KnownJobExecutionRunningState.Succeeded);
+                                    }
+                                    return [2 /*return*/];
+                            }
+                        });
+                    }); }, 10000);
+                })];
+        });
+    });
+}
+exports.waitJobToStop = waitJobToStop;
 function execTaskStep(command, _taskArn, _containerName) {
     return __awaiter(this, void 0, void 0, function () {
         var jobId, rc;
@@ -201,62 +241,76 @@ function isTaskContainerAlpine(taskArn, containerName) {
 exports.isTaskContainerAlpine = isTaskContainerAlpine;
 function pruneTask() {
     var _a, e_1, _b, _c;
-    var _d;
+    var _d, _e;
     return __awaiter(this, void 0, void 0, function () {
-        var startedBy, resourceGroup, jobs, prunes, _e, jobs_1, jobs_1_1, job, e_1_1;
-        return __generator(this, function (_f) {
-            switch (_f.label) {
+        var startedBy, resourceGroup, jobs, prunes, _f, jobs_1, jobs_1_1, job, e_1_1;
+        return __generator(this, function (_g) {
+            switch (_g.label) {
                 case 0:
                     startedBy = process.env.GITHUB_RUN_ID;
                     resourceGroup = process.env.RG_NAME;
-                    core.debug("Obtaining jobs with tag startedBy: ".concat(startedBy));
-                    jobs = acaClient.jobs.listByResourceGroup(process.env.RG_NAME);
+                    core.debug("Obtaining jobs with tag startedBy: ".concat(startedBy, " from resource group ").concat(resourceGroup));
+                    jobs = acaClient.jobs.listByResourceGroup(resourceGroup);
                     prunes = [];
-                    _f.label = 1;
+                    core.debug("Checking received jobs for specific tag: startedBy=".concat(startedBy));
+                    _g.label = 1;
                 case 1:
-                    _f.trys.push([1, 6, 7, 12]);
-                    _e = true, jobs_1 = __asyncValues(jobs);
-                    _f.label = 2;
+                    _g.trys.push([1, 6, 7, 12]);
+                    _f = true, jobs_1 = __asyncValues(jobs);
+                    _g.label = 2;
                 case 2: return [4 /*yield*/, jobs_1.next()];
                 case 3:
-                    if (!(jobs_1_1 = _f.sent(), _a = jobs_1_1.done, !_a)) return [3 /*break*/, 5];
+                    if (!(jobs_1_1 = _g.sent(), _a = jobs_1_1.done, !_a)) return [3 /*break*/, 5];
                     _c = jobs_1_1.value;
-                    _e = false;
+                    _f = false;
                     try {
                         job = _c;
-                        if (((_d = job.tags) === null || _d === void 0 ? void 0 : _d.startedBy) === startedBy && job.name) {
-                            core.debug("Deleting job ".concat(job.name));
-                            prunes.push(acaClient.jobs.beginDelete(resourceGroup, job.name));
+                        core.debug("Checking job ".concat(job.name, ". Tag startedBy=").concat((_d = job.tags) === null || _d === void 0 ? void 0 : _d.startedBy));
+                        if (((_e = job.tags) === null || _e === void 0 ? void 0 : _e.startedBy) === startedBy && job.name) {
+                            prunes.push(removeTemporaryJob(resourceGroup, job.name));
                         }
                     }
                     finally {
-                        _e = true;
+                        _f = true;
                     }
-                    _f.label = 4;
+                    _g.label = 4;
                 case 4: return [3 /*break*/, 2];
                 case 5: return [3 /*break*/, 12];
                 case 6:
-                    e_1_1 = _f.sent();
+                    e_1_1 = _g.sent();
                     e_1 = { error: e_1_1 };
                     return [3 /*break*/, 12];
                 case 7:
-                    _f.trys.push([7, , 10, 11]);
-                    if (!(!_e && !_a && (_b = jobs_1.return))) return [3 /*break*/, 9];
+                    _g.trys.push([7, , 10, 11]);
+                    if (!(!_f && !_a && (_b = jobs_1.return))) return [3 /*break*/, 9];
                     return [4 /*yield*/, _b.call(jobs_1)];
                 case 8:
-                    _f.sent();
-                    _f.label = 9;
+                    _g.sent();
+                    _g.label = 9;
                 case 9: return [3 /*break*/, 11];
                 case 10:
                     if (e_1) throw e_1.error;
                     return [7 /*endfinally*/];
                 case 11: return [7 /*endfinally*/];
-                case 12: return [2 /*return*/];
+                case 12: return [4 /*yield*/, Promise.all(prunes)];
+                case 13:
+                    _g.sent();
+                    core.debug("Cleaned up ".concat(prunes.length, " jobs"));
+                    return [2 /*return*/];
             }
         });
     });
 }
 exports.pruneTask = pruneTask;
+function removeTemporaryJob(resourceGroupName, jobName) {
+    return __awaiter(this, void 0, void 0, function () {
+        return __generator(this, function (_a) {
+            core.debug("Removing job ".concat(jobName, " from resource group ").concat(resourceGroupName));
+            return [2 /*return*/, acaClient.jobs.beginDeleteAndWait(resourceGroupName, jobName)];
+        });
+    });
+}
+exports.removeTemporaryJob = removeTemporaryJob;
 
 
 /***/ }),
@@ -417,7 +471,6 @@ function writeEntryPointScript(workingDirectory, entryPoint, entryPointArgs, pre
         }
         environmentPrefix = "env ".concat(envBuffer.join(' '), " ");
     }
-    // As ECS doesn't return/handle script status with exec command, printing that to output for parsing
     var content = "#!/bin/sh -l\n".concat(exportPath, "\ncd ").concat(workingDirectory, " && exec ").concat(environmentPrefix, " ").concat(entryPoint, " ").concat((entryPointArgs === null || entryPointArgs === void 0 ? void 0 : entryPointArgs.length) ? entryPointArgs.join(' ') : '', "\n");
     var jobId = (0, uuid_1.v1)();
     var filename = "".concat(jobId, ".sh");
@@ -1050,7 +1103,7 @@ var constants_1 = __nccwpck_require__(4865);
 function runContainerStep(stepContainer) {
     var _a, _b;
     return __awaiter(this, void 0, void 0, function () {
-        var container, createdTask, err_1, message;
+        var container, createdTask, err_1, message, succeeded;
         return __generator(this, function (_c) {
             switch (_c.label) {
                 case 0:
@@ -1075,23 +1128,37 @@ function runContainerStep(stepContainer) {
                     _c.sent();
                     throw new Error("failed to create job task: ".concat(message));
                 case 5:
-                    if (!(createdTask === null || createdTask === void 0 ? void 0 : createdTask.execution.id)) {
-                        throw new Error('created task should have ID');
+                    if (!createdTask.job.name) {
+                        throw new Error('created job should have name');
                     }
-                    core.debug("Job task created, waiting for it to come online ".concat(createdTask.execution.id));
-                    return [2 /*return*/, 0];
+                    if (!(createdTask === null || createdTask === void 0 ? void 0 : createdTask.execution.name)) {
+                        throw new Error('created task should have name');
+                    }
+                    core.debug("Job execution created, waiting for it to complete ".concat(createdTask.execution.name));
+                    return [4 /*yield*/, (0, aca_1.waitJobToStop)(process.env.RG_NAME, createdTask.job.name, createdTask.execution.name)];
+                case 6:
+                    succeeded = _c.sent();
+                    return [4 /*yield*/, (0, aca_1.removeTemporaryJob)(process.env.RG_NAME, createdTask.job.name)];
+                case 7:
+                    _c.sent();
+                    return [2 /*return*/, succeeded ? 0 : 1];
             }
         });
     });
 }
 exports.runContainerStep = runContainerStep;
 function createContainerDefinition(container) {
+    var _a;
     var volumeMounts = (0, utils_1.containerVolumes)(undefined, false, true);
     return {
         name: constants_1.JOB_CONTAINER_NAME,
         image: container.image,
-        command: [container.entryPoint],
-        args: (0, utils_1.fixArgs)(container.entryPointArgs),
+        command: container.entryPoint
+            ? [container.entryPoint]
+            : undefined,
+        args: ((_a = container.entryPointArgs) === null || _a === void 0 ? void 0 : _a.length)
+            ? (0, utils_1.fixArgs)(container.entryPointArgs)
+            : undefined,
         env: __spreadArray([], Object.entries(container.environmentVariables).map(function (entry) {
             return {
                 name: entry[0],
@@ -1100,7 +1167,7 @@ function createContainerDefinition(container) {
         }), true),
         resources: {
             cpu: 0.5,
-            memory: '1024Gb'
+            memory: '1Gi'
         },
         volumeMounts: volumeMounts
     };
@@ -1179,7 +1246,7 @@ exports.runScriptStep = void 0;
 var fs = __importStar(__nccwpck_require__(7147));
 var utils_1 = __nccwpck_require__(9297);
 var watcher_1 = __nccwpck_require__(9266);
-function runScriptStep(args, _tate, _responseFile) {
+function runScriptStep(args, _state, _responseFile) {
     return __awaiter(this, void 0, void 0, function () {
         var entryPoint, entryPointArgs, environmentVariables, _a, runnerPath, jobId, rc;
         return __generator(this, function (_b) {
@@ -3831,8 +3898,7 @@ var coreClient = __nccwpck_require__(7611);
 var coreRestPipeline = __nccwpck_require__(9146);
 var coreLro = __nccwpck_require__(334);
 
-function _interopNamespace(e) {
-    if (e && e.__esModule) return e;
+function _interopNamespaceDefault(e) {
     var n = Object.create(null);
     if (e) {
         Object.keys(e).forEach(function (k) {
@@ -3845,12 +3911,12 @@ function _interopNamespace(e) {
             }
         });
     }
-    n["default"] = e;
+    n.default = e;
     return Object.freeze(n);
 }
 
-var coreClient__namespace = /*#__PURE__*/_interopNamespace(coreClient);
-var coreRestPipeline__namespace = /*#__PURE__*/_interopNamespace(coreRestPipeline);
+var coreClient__namespace = /*#__PURE__*/_interopNamespaceDefault(coreClient);
+var coreRestPipeline__namespace = /*#__PURE__*/_interopNamespaceDefault(coreRestPipeline);
 
 /*
  * Copyright (c) Microsoft Corporation.
@@ -4264,20 +4330,20 @@ const AuthConfigCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "AuthConfig"
-                        }
-                    }
-                }
+                            className: "AuthConfig",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const AuthPlatform = {
     type: {
@@ -4287,17 +4353,17 @@ const AuthPlatform = {
             enabled: {
                 serializedName: "enabled",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             runtimeVersion: {
                 serializedName: "runtimeVersion",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const GlobalValidation = {
     type: {
@@ -4312,15 +4378,15 @@ const GlobalValidation = {
                         "RedirectToLoginPage",
                         "AllowAnonymous",
                         "Return401",
-                        "Return403"
-                    ]
-                }
+                        "Return403",
+                    ],
+                },
             },
             redirectToProvider: {
                 serializedName: "redirectToProvider",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             excludedPaths: {
                 serializedName: "excludedPaths",
@@ -4328,13 +4394,13 @@ const GlobalValidation = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            name: "String",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const IdentityProviders = {
     type: {
@@ -4345,50 +4411,50 @@ const IdentityProviders = {
                 serializedName: "azureActiveDirectory",
                 type: {
                     name: "Composite",
-                    className: "AzureActiveDirectory"
-                }
+                    className: "AzureActiveDirectory",
+                },
             },
             facebook: {
                 serializedName: "facebook",
                 type: {
                     name: "Composite",
-                    className: "Facebook"
-                }
+                    className: "Facebook",
+                },
             },
             gitHub: {
                 serializedName: "gitHub",
                 type: {
                     name: "Composite",
-                    className: "GitHub"
-                }
+                    className: "GitHub",
+                },
             },
             google: {
                 serializedName: "google",
                 type: {
                     name: "Composite",
-                    className: "Google"
-                }
+                    className: "Google",
+                },
             },
             twitter: {
                 serializedName: "twitter",
                 type: {
                     name: "Composite",
-                    className: "Twitter"
-                }
+                    className: "Twitter",
+                },
             },
             apple: {
                 serializedName: "apple",
                 type: {
                     name: "Composite",
-                    className: "Apple"
-                }
+                    className: "Apple",
+                },
             },
             azureStaticWebApps: {
                 serializedName: "azureStaticWebApps",
                 type: {
                     name: "Composite",
-                    className: "AzureStaticWebApps"
-                }
+                    className: "AzureStaticWebApps",
+                },
             },
             customOpenIdConnectProviders: {
                 serializedName: "customOpenIdConnectProviders",
@@ -4397,13 +4463,13 @@ const IdentityProviders = {
                     value: {
                         type: {
                             name: "Composite",
-                            className: "CustomOpenIdConnectProvider"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "CustomOpenIdConnectProvider",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const AzureActiveDirectory = {
     type: {
@@ -4413,38 +4479,38 @@ const AzureActiveDirectory = {
             enabled: {
                 serializedName: "enabled",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             registration: {
                 serializedName: "registration",
                 type: {
                     name: "Composite",
-                    className: "AzureActiveDirectoryRegistration"
-                }
+                    className: "AzureActiveDirectoryRegistration",
+                },
             },
             login: {
                 serializedName: "login",
                 type: {
                     name: "Composite",
-                    className: "AzureActiveDirectoryLogin"
-                }
+                    className: "AzureActiveDirectoryLogin",
+                },
             },
             validation: {
                 serializedName: "validation",
                 type: {
                     name: "Composite",
-                    className: "AzureActiveDirectoryValidation"
-                }
+                    className: "AzureActiveDirectoryValidation",
+                },
             },
             isAutoProvisioned: {
                 serializedName: "isAutoProvisioned",
                 type: {
-                    name: "Boolean"
-                }
-            }
-        }
-    }
+                    name: "Boolean",
+                },
+            },
+        },
+    },
 };
 const AzureActiveDirectoryRegistration = {
     type: {
@@ -4454,41 +4520,41 @@ const AzureActiveDirectoryRegistration = {
             openIdIssuer: {
                 serializedName: "openIdIssuer",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             clientId: {
                 serializedName: "clientId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             clientSecretSettingName: {
                 serializedName: "clientSecretSettingName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             clientSecretCertificateThumbprint: {
                 serializedName: "clientSecretCertificateThumbprint",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             clientSecretCertificateSubjectAlternativeName: {
                 serializedName: "clientSecretCertificateSubjectAlternativeName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             clientSecretCertificateIssuer: {
                 serializedName: "clientSecretCertificateIssuer",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const AzureActiveDirectoryLogin = {
     type: {
@@ -4501,19 +4567,19 @@ const AzureActiveDirectoryLogin = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             disableWWWAuthenticate: {
                 serializedName: "disableWWWAuthenticate",
                 type: {
-                    name: "Boolean"
-                }
-            }
-        }
-    }
+                    name: "Boolean",
+                },
+            },
+        },
+    },
 };
 const AzureActiveDirectoryValidation = {
     type: {
@@ -4524,8 +4590,8 @@ const AzureActiveDirectoryValidation = {
                 serializedName: "jwtClaimChecks",
                 type: {
                     name: "Composite",
-                    className: "JwtClaimChecks"
-                }
+                    className: "JwtClaimChecks",
+                },
             },
             allowedAudiences: {
                 serializedName: "allowedAudiences",
@@ -4533,20 +4599,20 @@ const AzureActiveDirectoryValidation = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             defaultAuthorizationPolicy: {
                 serializedName: "defaultAuthorizationPolicy",
                 type: {
                     name: "Composite",
-                    className: "DefaultAuthorizationPolicy"
-                }
-            }
-        }
-    }
+                    className: "DefaultAuthorizationPolicy",
+                },
+            },
+        },
+    },
 };
 const JwtClaimChecks = {
     type: {
@@ -4559,10 +4625,10 @@ const JwtClaimChecks = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             allowedClientApplications: {
                 serializedName: "allowedClientApplications",
@@ -4570,13 +4636,13 @@ const JwtClaimChecks = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            name: "String",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const DefaultAuthorizationPolicy = {
     type: {
@@ -4587,8 +4653,8 @@ const DefaultAuthorizationPolicy = {
                 serializedName: "allowedPrincipals",
                 type: {
                     name: "Composite",
-                    className: "AllowedPrincipals"
-                }
+                    className: "AllowedPrincipals",
+                },
             },
             allowedApplications: {
                 serializedName: "allowedApplications",
@@ -4596,13 +4662,13 @@ const DefaultAuthorizationPolicy = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            name: "String",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const AllowedPrincipals = {
     type: {
@@ -4615,10 +4681,10 @@ const AllowedPrincipals = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             identities: {
                 serializedName: "identities",
@@ -4626,13 +4692,13 @@ const AllowedPrincipals = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            name: "String",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const Facebook = {
     type: {
@@ -4642,31 +4708,31 @@ const Facebook = {
             enabled: {
                 serializedName: "enabled",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             registration: {
                 serializedName: "registration",
                 type: {
                     name: "Composite",
-                    className: "AppRegistration"
-                }
+                    className: "AppRegistration",
+                },
             },
             graphApiVersion: {
                 serializedName: "graphApiVersion",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             login: {
                 serializedName: "login",
                 type: {
                     name: "Composite",
-                    className: "LoginScopes"
-                }
-            }
-        }
-    }
+                    className: "LoginScopes",
+                },
+            },
+        },
+    },
 };
 const AppRegistration = {
     type: {
@@ -4676,17 +4742,17 @@ const AppRegistration = {
             appId: {
                 serializedName: "appId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             appSecretSettingName: {
                 serializedName: "appSecretSettingName",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const LoginScopes = {
     type: {
@@ -4699,13 +4765,13 @@ const LoginScopes = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            name: "String",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const GitHub = {
     type: {
@@ -4715,25 +4781,25 @@ const GitHub = {
             enabled: {
                 serializedName: "enabled",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             registration: {
                 serializedName: "registration",
                 type: {
                     name: "Composite",
-                    className: "ClientRegistration"
-                }
+                    className: "ClientRegistration",
+                },
             },
             login: {
                 serializedName: "login",
                 type: {
                     name: "Composite",
-                    className: "LoginScopes"
-                }
-            }
-        }
-    }
+                    className: "LoginScopes",
+                },
+            },
+        },
+    },
 };
 const ClientRegistration = {
     type: {
@@ -4743,17 +4809,17 @@ const ClientRegistration = {
             clientId: {
                 serializedName: "clientId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             clientSecretSettingName: {
                 serializedName: "clientSecretSettingName",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const Google = {
     type: {
@@ -4763,32 +4829,32 @@ const Google = {
             enabled: {
                 serializedName: "enabled",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             registration: {
                 serializedName: "registration",
                 type: {
                     name: "Composite",
-                    className: "ClientRegistration"
-                }
+                    className: "ClientRegistration",
+                },
             },
             login: {
                 serializedName: "login",
                 type: {
                     name: "Composite",
-                    className: "LoginScopes"
-                }
+                    className: "LoginScopes",
+                },
             },
             validation: {
                 serializedName: "validation",
                 type: {
                     name: "Composite",
-                    className: "AllowedAudiencesValidation"
-                }
-            }
-        }
-    }
+                    className: "AllowedAudiencesValidation",
+                },
+            },
+        },
+    },
 };
 const AllowedAudiencesValidation = {
     type: {
@@ -4801,13 +4867,13 @@ const AllowedAudiencesValidation = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            name: "String",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const Twitter = {
     type: {
@@ -4817,18 +4883,18 @@ const Twitter = {
             enabled: {
                 serializedName: "enabled",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             registration: {
                 serializedName: "registration",
                 type: {
                     name: "Composite",
-                    className: "TwitterRegistration"
-                }
-            }
-        }
-    }
+                    className: "TwitterRegistration",
+                },
+            },
+        },
+    },
 };
 const TwitterRegistration = {
     type: {
@@ -4838,17 +4904,17 @@ const TwitterRegistration = {
             consumerKey: {
                 serializedName: "consumerKey",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             consumerSecretSettingName: {
                 serializedName: "consumerSecretSettingName",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const Apple = {
     type: {
@@ -4858,25 +4924,25 @@ const Apple = {
             enabled: {
                 serializedName: "enabled",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             registration: {
                 serializedName: "registration",
                 type: {
                     name: "Composite",
-                    className: "AppleRegistration"
-                }
+                    className: "AppleRegistration",
+                },
             },
             login: {
                 serializedName: "login",
                 type: {
                     name: "Composite",
-                    className: "LoginScopes"
-                }
-            }
-        }
-    }
+                    className: "LoginScopes",
+                },
+            },
+        },
+    },
 };
 const AppleRegistration = {
     type: {
@@ -4886,17 +4952,17 @@ const AppleRegistration = {
             clientId: {
                 serializedName: "clientId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             clientSecretSettingName: {
                 serializedName: "clientSecretSettingName",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const AzureStaticWebApps = {
     type: {
@@ -4906,18 +4972,18 @@ const AzureStaticWebApps = {
             enabled: {
                 serializedName: "enabled",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             registration: {
                 serializedName: "registration",
                 type: {
                     name: "Composite",
-                    className: "AzureStaticWebAppsRegistration"
-                }
-            }
-        }
-    }
+                    className: "AzureStaticWebAppsRegistration",
+                },
+            },
+        },
+    },
 };
 const AzureStaticWebAppsRegistration = {
     type: {
@@ -4927,11 +4993,11 @@ const AzureStaticWebAppsRegistration = {
             clientId: {
                 serializedName: "clientId",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const CustomOpenIdConnectProvider = {
     type: {
@@ -4941,25 +5007,25 @@ const CustomOpenIdConnectProvider = {
             enabled: {
                 serializedName: "enabled",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             registration: {
                 serializedName: "registration",
                 type: {
                     name: "Composite",
-                    className: "OpenIdConnectRegistration"
-                }
+                    className: "OpenIdConnectRegistration",
+                },
             },
             login: {
                 serializedName: "login",
                 type: {
                     name: "Composite",
-                    className: "OpenIdConnectLogin"
-                }
-            }
-        }
-    }
+                    className: "OpenIdConnectLogin",
+                },
+            },
+        },
+    },
 };
 const OpenIdConnectRegistration = {
     type: {
@@ -4969,25 +5035,25 @@ const OpenIdConnectRegistration = {
             clientId: {
                 serializedName: "clientId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             clientCredential: {
                 serializedName: "clientCredential",
                 type: {
                     name: "Composite",
-                    className: "OpenIdConnectClientCredential"
-                }
+                    className: "OpenIdConnectClientCredential",
+                },
             },
             openIdConnectConfiguration: {
                 serializedName: "openIdConnectConfiguration",
                 type: {
                     name: "Composite",
-                    className: "OpenIdConnectConfig"
-                }
-            }
-        }
-    }
+                    className: "OpenIdConnectConfig",
+                },
+            },
+        },
+    },
 };
 const OpenIdConnectClientCredential = {
     type: {
@@ -4999,17 +5065,17 @@ const OpenIdConnectClientCredential = {
                 isConstant: true,
                 serializedName: "method",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             clientSecretSettingName: {
                 serializedName: "clientSecretSettingName",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const OpenIdConnectConfig = {
     type: {
@@ -5019,35 +5085,35 @@ const OpenIdConnectConfig = {
             authorizationEndpoint: {
                 serializedName: "authorizationEndpoint",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             tokenEndpoint: {
                 serializedName: "tokenEndpoint",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             issuer: {
                 serializedName: "issuer",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             certificationUri: {
                 serializedName: "certificationUri",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             wellKnownOpenIdConfiguration: {
                 serializedName: "wellKnownOpenIdConfiguration",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const OpenIdConnectLogin = {
     type: {
@@ -5057,8 +5123,8 @@ const OpenIdConnectLogin = {
             nameClaimType: {
                 serializedName: "nameClaimType",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             scopes: {
                 serializedName: "scopes",
@@ -5066,13 +5132,13 @@ const OpenIdConnectLogin = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            name: "String",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const Login = {
     type: {
@@ -5083,14 +5149,21 @@ const Login = {
                 serializedName: "routes",
                 type: {
                     name: "Composite",
-                    className: "LoginRoutes"
-                }
+                    className: "LoginRoutes",
+                },
+            },
+            tokenStore: {
+                serializedName: "tokenStore",
+                type: {
+                    name: "Composite",
+                    className: "TokenStore",
+                },
             },
             preserveUrlFragmentsForLogins: {
                 serializedName: "preserveUrlFragmentsForLogins",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             allowedExternalRedirectUrls: {
                 serializedName: "allowedExternalRedirectUrls",
@@ -5098,27 +5171,27 @@ const Login = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             cookieExpiration: {
                 serializedName: "cookieExpiration",
                 type: {
                     name: "Composite",
-                    className: "CookieExpiration"
-                }
+                    className: "CookieExpiration",
+                },
             },
             nonce: {
                 serializedName: "nonce",
                 type: {
                     name: "Composite",
-                    className: "Nonce"
-                }
-            }
-        }
-    }
+                    className: "Nonce",
+                },
+            },
+        },
+    },
 };
 const LoginRoutes = {
     type: {
@@ -5128,11 +5201,53 @@ const LoginRoutes = {
             logoutEndpoint: {
                 serializedName: "logoutEndpoint",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
+};
+const TokenStore = {
+    type: {
+        name: "Composite",
+        className: "TokenStore",
+        modelProperties: {
+            enabled: {
+                serializedName: "enabled",
+                type: {
+                    name: "Boolean",
+                },
+            },
+            tokenRefreshExtensionHours: {
+                serializedName: "tokenRefreshExtensionHours",
+                type: {
+                    name: "Number",
+                },
+            },
+            azureBlobStorage: {
+                serializedName: "azureBlobStorage",
+                type: {
+                    name: "Composite",
+                    className: "BlobStorageTokenStore",
+                },
+            },
+        },
+    },
+};
+const BlobStorageTokenStore = {
+    type: {
+        name: "Composite",
+        className: "BlobStorageTokenStore",
+        modelProperties: {
+            sasUrlSettingName: {
+                serializedName: "sasUrlSettingName",
+                required: true,
+                type: {
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const CookieExpiration = {
     type: {
@@ -5143,17 +5258,17 @@ const CookieExpiration = {
                 serializedName: "convention",
                 type: {
                     name: "Enum",
-                    allowedValues: ["FixedTime", "IdentityProviderDerived"]
-                }
+                    allowedValues: ["FixedTime", "IdentityProviderDerived"],
+                },
             },
             timeToExpiration: {
                 serializedName: "timeToExpiration",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const Nonce = {
     type: {
@@ -5163,17 +5278,17 @@ const Nonce = {
             validateNonce: {
                 serializedName: "validateNonce",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             nonceExpirationInterval: {
                 serializedName: "nonceExpirationInterval",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const HttpSettings = {
     type: {
@@ -5183,25 +5298,25 @@ const HttpSettings = {
             requireHttps: {
                 serializedName: "requireHttps",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             routes: {
                 serializedName: "routes",
                 type: {
                     name: "Composite",
-                    className: "HttpSettingsRoutes"
-                }
+                    className: "HttpSettingsRoutes",
+                },
             },
             forwardProxy: {
                 serializedName: "forwardProxy",
                 type: {
                     name: "Composite",
-                    className: "ForwardProxy"
-                }
-            }
-        }
-    }
+                    className: "ForwardProxy",
+                },
+            },
+        },
+    },
 };
 const HttpSettingsRoutes = {
     type: {
@@ -5211,11 +5326,11 @@ const HttpSettingsRoutes = {
             apiPrefix: {
                 serializedName: "apiPrefix",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ForwardProxy = {
     type: {
@@ -5226,23 +5341,43 @@ const ForwardProxy = {
                 serializedName: "convention",
                 type: {
                     name: "Enum",
-                    allowedValues: ["NoProxy", "Standard", "Custom"]
-                }
+                    allowedValues: ["NoProxy", "Standard", "Custom"],
+                },
             },
             customHostHeaderName: {
                 serializedName: "customHostHeaderName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             customProtoHeaderName: {
                 serializedName: "customProtoHeaderName",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
+};
+const EncryptionSettings = {
+    type: {
+        name: "Composite",
+        className: "EncryptionSettings",
+        modelProperties: {
+            containerAppAuthEncryptionSecretName: {
+                serializedName: "containerAppAuthEncryptionSecretName",
+                type: {
+                    name: "String",
+                },
+            },
+            containerAppAuthSigningSecretName: {
+                serializedName: "containerAppAuthSigningSecretName",
+                type: {
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const Resource = {
     type: {
@@ -5253,32 +5388,32 @@ const Resource = {
                 serializedName: "id",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             name: {
                 serializedName: "name",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             type: {
                 serializedName: "type",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             systemData: {
                 serializedName: "systemData",
                 type: {
                     name: "Composite",
-                    className: "SystemData"
-                }
-            }
-        }
-    }
+                    className: "SystemData",
+                },
+            },
+        },
+    },
 };
 const SystemData = {
     type: {
@@ -5288,41 +5423,41 @@ const SystemData = {
             createdBy: {
                 serializedName: "createdBy",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             createdByType: {
                 serializedName: "createdByType",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             createdAt: {
                 serializedName: "createdAt",
                 type: {
-                    name: "DateTime"
-                }
+                    name: "DateTime",
+                },
             },
             lastModifiedBy: {
                 serializedName: "lastModifiedBy",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             lastModifiedByType: {
                 serializedName: "lastModifiedByType",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             lastModifiedAt: {
                 serializedName: "lastModifiedAt",
                 type: {
-                    name: "DateTime"
-                }
-            }
-        }
-    }
+                    name: "DateTime",
+                },
+            },
+        },
+    },
 };
 const DefaultErrorResponse = {
     type: {
@@ -5333,11 +5468,11 @@ const DefaultErrorResponse = {
                 serializedName: "error",
                 type: {
                     name: "Composite",
-                    className: "DefaultErrorResponseError"
-                }
-            }
-        }
-    }
+                    className: "DefaultErrorResponseError",
+                },
+            },
+        },
+    },
 };
 const DefaultErrorResponseError = {
     type: {
@@ -5348,22 +5483,22 @@ const DefaultErrorResponseError = {
                 serializedName: "code",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             message: {
                 serializedName: "message",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             target: {
                 serializedName: "target",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             details: {
                 serializedName: "details",
@@ -5372,20 +5507,20 @@ const DefaultErrorResponseError = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "DefaultErrorResponseErrorDetailsItem"
-                        }
-                    }
-                }
+                            className: "DefaultErrorResponseErrorDetailsItem",
+                        },
+                    },
+                },
             },
             innererror: {
                 serializedName: "innererror",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const DefaultErrorResponseErrorDetailsItem = {
     type: {
@@ -5396,25 +5531,25 @@ const DefaultErrorResponseErrorDetailsItem = {
                 serializedName: "code",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             message: {
                 serializedName: "message",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             target: {
                 serializedName: "target",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const AvailableWorkloadProfilesCollection = {
     type: {
@@ -5429,20 +5564,20 @@ const AvailableWorkloadProfilesCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "AvailableWorkloadProfile"
-                        }
-                    }
-                }
+                            className: "AvailableWorkloadProfile",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const AvailableWorkloadProfileProperties = {
     type: {
@@ -5452,35 +5587,41 @@ const AvailableWorkloadProfileProperties = {
             category: {
                 serializedName: "category",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             applicability: {
                 serializedName: "applicability",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             cores: {
                 serializedName: "cores",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             memoryGiB: {
                 serializedName: "memoryGiB",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
+            },
+            gpus: {
+                serializedName: "gpus",
+                type: {
+                    name: "Number",
+                },
             },
             displayName: {
                 serializedName: "displayName",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ErrorResponse = {
     type: {
@@ -5491,11 +5632,11 @@ const ErrorResponse = {
                 serializedName: "error",
                 type: {
                     name: "Composite",
-                    className: "ErrorDetail"
-                }
-            }
-        }
-    }
+                    className: "ErrorDetail",
+                },
+            },
+        },
+    },
 };
 const ErrorDetail = {
     type: {
@@ -5506,22 +5647,22 @@ const ErrorDetail = {
                 serializedName: "code",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             message: {
                 serializedName: "message",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             target: {
                 serializedName: "target",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             details: {
                 serializedName: "details",
@@ -5531,10 +5672,10 @@ const ErrorDetail = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ErrorDetail"
-                        }
-                    }
-                }
+                            className: "ErrorDetail",
+                        },
+                    },
+                },
             },
             additionalInfo: {
                 serializedName: "additionalInfo",
@@ -5544,13 +5685,13 @@ const ErrorDetail = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ErrorAdditionalInfo"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "ErrorAdditionalInfo",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const ErrorAdditionalInfo = {
     type: {
@@ -5561,19 +5702,19 @@ const ErrorAdditionalInfo = {
                 serializedName: "type",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             info: {
                 serializedName: "info",
                 readOnly: true,
                 type: {
                     name: "Dictionary",
-                    value: { type: { name: "any" } }
-                }
-            }
-        }
-    }
+                    value: { type: { name: "any" } },
+                },
+            },
+        },
+    },
 };
 const BillingMeterCollection = {
     type: {
@@ -5588,13 +5729,13 @@ const BillingMeterCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "BillingMeter"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "BillingMeter",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const BillingMeterProperties = {
     type: {
@@ -5604,23 +5745,23 @@ const BillingMeterProperties = {
             category: {
                 serializedName: "category",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             meterType: {
                 serializedName: "meterType",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             displayName: {
                 serializedName: "displayName",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ConnectedEnvironmentCollection = {
     type: {
@@ -5634,20 +5775,20 @@ const ConnectedEnvironmentCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ConnectedEnvironment"
-                        }
-                    }
-                }
+                            className: "ConnectedEnvironment",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ExtendedLocation = {
     type: {
@@ -5657,17 +5798,17 @@ const ExtendedLocation = {
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             type: {
                 serializedName: "type",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const CustomDomainConfiguration = {
     type: {
@@ -5678,50 +5819,50 @@ const CustomDomainConfiguration = {
                 serializedName: "customDomainVerificationId",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             dnsSuffix: {
                 serializedName: "dnsSuffix",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             certificateValue: {
                 serializedName: "certificateValue",
                 type: {
-                    name: "ByteArray"
-                }
+                    name: "ByteArray",
+                },
             },
             certificatePassword: {
                 serializedName: "certificatePassword",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             expirationDate: {
                 serializedName: "expirationDate",
                 readOnly: true,
                 type: {
-                    name: "DateTime"
-                }
+                    name: "DateTime",
+                },
             },
             thumbprint: {
                 serializedName: "thumbprint",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             subjectName: {
                 serializedName: "subjectName",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const CheckNameAvailabilityRequest = {
     type: {
@@ -5731,17 +5872,17 @@ const CheckNameAvailabilityRequest = {
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             type: {
                 serializedName: "type",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const CheckNameAvailabilityResponse = {
     type: {
@@ -5751,23 +5892,23 @@ const CheckNameAvailabilityResponse = {
             nameAvailable: {
                 serializedName: "nameAvailable",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             reason: {
                 serializedName: "reason",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             message: {
                 serializedName: "message",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const CertificateCollection = {
     type: {
@@ -5782,20 +5923,20 @@ const CertificateCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "Certificate"
-                        }
-                    }
-                }
+                            className: "Certificate",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const CertificateProperties = {
     type: {
@@ -5806,21 +5947,21 @@ const CertificateProperties = {
                 serializedName: "provisioningState",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             password: {
                 serializedName: "password",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             subjectName: {
                 serializedName: "subjectName",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             subjectAlternativeNames: {
                 serializedName: "subjectAlternativeNames",
@@ -5829,61 +5970,61 @@ const CertificateProperties = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             value: {
                 serializedName: "value",
                 type: {
-                    name: "ByteArray"
-                }
+                    name: "ByteArray",
+                },
             },
             issuer: {
                 serializedName: "issuer",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             issueDate: {
                 serializedName: "issueDate",
                 readOnly: true,
                 type: {
-                    name: "DateTime"
-                }
+                    name: "DateTime",
+                },
             },
             expirationDate: {
                 serializedName: "expirationDate",
                 readOnly: true,
                 type: {
-                    name: "DateTime"
-                }
+                    name: "DateTime",
+                },
             },
             thumbprint: {
                 serializedName: "thumbprint",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             valid: {
                 serializedName: "valid",
                 readOnly: true,
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             publicKeyHash: {
                 serializedName: "publicKeyHash",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const CertificatePatch = {
     type: {
@@ -5894,11 +6035,11 @@ const CertificatePatch = {
                 serializedName: "tags",
                 type: {
                     name: "Dictionary",
-                    value: { type: { name: "String" } }
-                }
-            }
-        }
-    }
+                    value: { type: { name: "String" } },
+                },
+            },
+        },
+    },
 };
 const DaprComponentsCollection = {
     type: {
@@ -5913,20 +6054,20 @@ const DaprComponentsCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "DaprComponent"
-                        }
-                    }
-                }
+                            className: "DaprComponent",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const Secret = {
     type: {
@@ -5936,29 +6077,29 @@ const Secret = {
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             value: {
                 serializedName: "value",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             identity: {
                 serializedName: "identity",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             keyVaultUrl: {
                 serializedName: "keyVaultUrl",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const DaprMetadata = {
     type: {
@@ -5968,23 +6109,23 @@ const DaprMetadata = {
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             value: {
                 serializedName: "value",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             secretRef: {
                 serializedName: "secretRef",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const DaprSecretsCollection = {
     type: {
@@ -5999,13 +6140,13 @@ const DaprSecretsCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "DaprSecret"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "DaprSecret",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const DaprSecret = {
     type: {
@@ -6016,18 +6157,18 @@ const DaprSecret = {
                 serializedName: "name",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             value: {
                 serializedName: "value",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ConnectedEnvironmentStoragesCollection = {
     type: {
@@ -6042,13 +6183,13 @@ const ConnectedEnvironmentStoragesCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ConnectedEnvironmentStorage"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "ConnectedEnvironmentStorage",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const ConnectedEnvironmentStorageProperties = {
     type: {
@@ -6059,11 +6200,11 @@ const ConnectedEnvironmentStorageProperties = {
                 serializedName: "azureFile",
                 type: {
                     name: "Composite",
-                    className: "AzureFileProperties"
-                }
-            }
-        }
-    }
+                    className: "AzureFileProperties",
+                },
+            },
+        },
+    },
 };
 const AzureFileProperties = {
     type: {
@@ -6073,29 +6214,29 @@ const AzureFileProperties = {
             accountName: {
                 serializedName: "accountName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             accountKey: {
                 serializedName: "accountKey",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             accessMode: {
                 serializedName: "accessMode",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             shareName: {
                 serializedName: "shareName",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ContainerAppCollection = {
     type: {
@@ -6110,20 +6251,20 @@ const ContainerAppCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ContainerApp"
-                        }
-                    }
-                }
+                            className: "ContainerApp",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ManagedServiceIdentity = {
     type: {
@@ -6134,34 +6275,34 @@ const ManagedServiceIdentity = {
                 serializedName: "principalId",
                 readOnly: true,
                 type: {
-                    name: "Uuid"
-                }
+                    name: "Uuid",
+                },
             },
             tenantId: {
                 serializedName: "tenantId",
                 readOnly: true,
                 type: {
-                    name: "Uuid"
-                }
+                    name: "Uuid",
+                },
             },
             type: {
                 serializedName: "type",
                 required: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             userAssignedIdentities: {
                 serializedName: "userAssignedIdentities",
                 type: {
                     name: "Dictionary",
                     value: {
-                        type: { name: "Composite", className: "UserAssignedIdentity" }
-                    }
-                }
-            }
-        }
-    }
+                        type: { name: "Composite", className: "UserAssignedIdentity" },
+                    },
+                },
+            },
+        },
+    },
 };
 const UserAssignedIdentity = {
     type: {
@@ -6172,18 +6313,18 @@ const UserAssignedIdentity = {
                 serializedName: "principalId",
                 readOnly: true,
                 type: {
-                    name: "Uuid"
-                }
+                    name: "Uuid",
+                },
             },
             clientId: {
                 serializedName: "clientId",
                 readOnly: true,
                 type: {
-                    name: "Uuid"
-                }
-            }
-        }
-    }
+                    name: "Uuid",
+                },
+            },
+        },
+    },
 };
 const Configuration = {
     type: {
@@ -6197,24 +6338,24 @@ const Configuration = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "Secret"
-                        }
-                    }
-                }
+                            className: "Secret",
+                        },
+                    },
+                },
             },
             activeRevisionsMode: {
                 defaultValue: "Single",
                 serializedName: "activeRevisionsMode",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             ingress: {
                 serializedName: "ingress",
                 type: {
                     name: "Composite",
-                    className: "Ingress"
-                }
+                    className: "Ingress",
+                },
             },
             registries: {
                 serializedName: "registries",
@@ -6223,33 +6364,33 @@ const Configuration = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "RegistryCredentials"
-                        }
-                    }
-                }
+                            className: "RegistryCredentials",
+                        },
+                    },
+                },
             },
             dapr: {
                 serializedName: "dapr",
                 type: {
                     name: "Composite",
-                    className: "Dapr"
-                }
+                    className: "Dapr",
+                },
             },
             maxInactiveRevisions: {
                 serializedName: "maxInactiveRevisions",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             service: {
                 serializedName: "service",
                 type: {
                     name: "Composite",
-                    className: "Service"
-                }
-            }
-        }
-    }
+                    className: "Service",
+                },
+            },
+        },
+    },
 };
 const Ingress = {
     type: {
@@ -6260,34 +6401,34 @@ const Ingress = {
                 serializedName: "fqdn",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             external: {
                 defaultValue: false,
                 serializedName: "external",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             targetPort: {
                 serializedName: "targetPort",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             exposedPort: {
                 serializedName: "exposedPort",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             transport: {
                 defaultValue: "auto",
                 serializedName: "transport",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             traffic: {
                 serializedName: "traffic",
@@ -6296,10 +6437,10 @@ const Ingress = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "TrafficWeight"
-                        }
-                    }
-                }
+                            className: "TrafficWeight",
+                        },
+                    },
+                },
             },
             customDomains: {
                 serializedName: "customDomains",
@@ -6308,17 +6449,17 @@ const Ingress = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "CustomDomain"
-                        }
-                    }
-                }
+                            className: "CustomDomain",
+                        },
+                    },
+                },
             },
             allowInsecure: {
                 defaultValue: false,
                 serializedName: "allowInsecure",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             ipSecurityRestrictions: {
                 serializedName: "ipSecurityRestrictions",
@@ -6327,33 +6468,45 @@ const Ingress = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "IpSecurityRestrictionRule"
-                        }
-                    }
-                }
+                            className: "IpSecurityRestrictionRule",
+                        },
+                    },
+                },
             },
             stickySessions: {
                 serializedName: "stickySessions",
                 type: {
                     name: "Composite",
-                    className: "IngressStickySessions"
-                }
+                    className: "IngressStickySessions",
+                },
             },
             clientCertificateMode: {
                 serializedName: "clientCertificateMode",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             corsPolicy: {
                 serializedName: "corsPolicy",
                 type: {
                     name: "Composite",
-                    className: "CorsPolicy"
-                }
-            }
-        }
-    }
+                    className: "CorsPolicy",
+                },
+            },
+            additionalPortMappings: {
+                serializedName: "additionalPortMappings",
+                type: {
+                    name: "Sequence",
+                    element: {
+                        type: {
+                            name: "Composite",
+                            className: "IngressPortMapping",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const TrafficWeight = {
     type: {
@@ -6363,30 +6516,30 @@ const TrafficWeight = {
             revisionName: {
                 serializedName: "revisionName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             weight: {
                 serializedName: "weight",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             latestRevision: {
                 defaultValue: false,
                 serializedName: "latestRevision",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             label: {
                 serializedName: "label",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const CustomDomain = {
     type: {
@@ -6397,23 +6550,23 @@ const CustomDomain = {
                 serializedName: "name",
                 required: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             bindingType: {
                 serializedName: "bindingType",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             certificateId: {
                 serializedName: "certificateId",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const IpSecurityRestrictionRule = {
     type: {
@@ -6424,31 +6577,31 @@ const IpSecurityRestrictionRule = {
                 serializedName: "name",
                 required: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             description: {
                 serializedName: "description",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             ipAddressRange: {
                 serializedName: "ipAddressRange",
                 required: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             action: {
                 serializedName: "action",
                 required: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const IngressStickySessions = {
     type: {
@@ -6458,11 +6611,11 @@ const IngressStickySessions = {
             affinity: {
                 serializedName: "affinity",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const CorsPolicy = {
     type: {
@@ -6476,10 +6629,10 @@ const CorsPolicy = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             allowedMethods: {
                 serializedName: "allowedMethods",
@@ -6487,10 +6640,10 @@ const CorsPolicy = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             allowedHeaders: {
                 serializedName: "allowedHeaders",
@@ -6498,10 +6651,10 @@ const CorsPolicy = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             exposeHeaders: {
                 serializedName: "exposeHeaders",
@@ -6509,25 +6662,53 @@ const CorsPolicy = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             maxAge: {
                 serializedName: "maxAge",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             allowCredentials: {
                 serializedName: "allowCredentials",
                 type: {
-                    name: "Boolean"
-                }
-            }
-        }
-    }
+                    name: "Boolean",
+                },
+            },
+        },
+    },
+};
+const IngressPortMapping = {
+    type: {
+        name: "Composite",
+        className: "IngressPortMapping",
+        modelProperties: {
+            external: {
+                serializedName: "external",
+                required: true,
+                type: {
+                    name: "Boolean",
+                },
+            },
+            targetPort: {
+                serializedName: "targetPort",
+                required: true,
+                type: {
+                    name: "Number",
+                },
+            },
+            exposedPort: {
+                serializedName: "exposedPort",
+                type: {
+                    name: "Number",
+                },
+            },
+        },
+    },
 };
 const RegistryCredentials = {
     type: {
@@ -6537,29 +6718,29 @@ const RegistryCredentials = {
             server: {
                 serializedName: "server",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             username: {
                 serializedName: "username",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             passwordSecretRef: {
                 serializedName: "passwordSecretRef",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             identity: {
                 serializedName: "identity",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const Dapr = {
     type: {
@@ -6570,54 +6751,54 @@ const Dapr = {
                 defaultValue: false,
                 serializedName: "enabled",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             appId: {
                 serializedName: "appId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             appProtocol: {
                 defaultValue: "http",
                 serializedName: "appProtocol",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             appPort: {
                 serializedName: "appPort",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             httpReadBufferSize: {
                 serializedName: "httpReadBufferSize",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             httpMaxRequestSize: {
                 serializedName: "httpMaxRequestSize",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             logLevel: {
                 serializedName: "logLevel",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             enableApiLogging: {
                 serializedName: "enableApiLogging",
                 type: {
-                    name: "Boolean"
-                }
-            }
-        }
-    }
+                    name: "Boolean",
+                },
+            },
+        },
+    },
 };
 const Service = {
     type: {
@@ -6628,11 +6809,11 @@ const Service = {
                 serializedName: "type",
                 required: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const Template = {
     type: {
@@ -6642,14 +6823,14 @@ const Template = {
             revisionSuffix: {
                 serializedName: "revisionSuffix",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             terminationGracePeriodSeconds: {
                 serializedName: "terminationGracePeriodSeconds",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             initContainers: {
                 serializedName: "initContainers",
@@ -6658,10 +6839,10 @@ const Template = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "InitContainer"
-                        }
-                    }
-                }
+                            className: "InitContainer",
+                        },
+                    },
+                },
             },
             containers: {
                 serializedName: "containers",
@@ -6670,17 +6851,17 @@ const Template = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "Container"
-                        }
-                    }
-                }
+                            className: "Container",
+                        },
+                    },
+                },
             },
             scale: {
                 serializedName: "scale",
                 type: {
                     name: "Composite",
-                    className: "Scale"
-                }
+                    className: "Scale",
+                },
             },
             volumes: {
                 serializedName: "volumes",
@@ -6689,10 +6870,10 @@ const Template = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "Volume"
-                        }
-                    }
-                }
+                            className: "Volume",
+                        },
+                    },
+                },
             },
             serviceBinds: {
                 serializedName: "serviceBinds",
@@ -6701,13 +6882,13 @@ const Template = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ServiceBind"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "ServiceBind",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const BaseContainer = {
     type: {
@@ -6717,14 +6898,14 @@ const BaseContainer = {
             image: {
                 serializedName: "image",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             command: {
                 serializedName: "command",
@@ -6732,10 +6913,10 @@ const BaseContainer = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             args: {
                 serializedName: "args",
@@ -6743,10 +6924,10 @@ const BaseContainer = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             env: {
                 serializedName: "env",
@@ -6755,17 +6936,17 @@ const BaseContainer = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "EnvironmentVar"
-                        }
-                    }
-                }
+                            className: "EnvironmentVar",
+                        },
+                    },
+                },
             },
             resources: {
                 serializedName: "resources",
                 type: {
                     name: "Composite",
-                    className: "ContainerResources"
-                }
+                    className: "ContainerResources",
+                },
             },
             volumeMounts: {
                 serializedName: "volumeMounts",
@@ -6774,13 +6955,13 @@ const BaseContainer = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "VolumeMount"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "VolumeMount",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const EnvironmentVar = {
     type: {
@@ -6790,23 +6971,23 @@ const EnvironmentVar = {
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             value: {
                 serializedName: "value",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             secretRef: {
                 serializedName: "secretRef",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ContainerResources = {
     type: {
@@ -6816,24 +6997,24 @@ const ContainerResources = {
             cpu: {
                 serializedName: "cpu",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             memory: {
                 serializedName: "memory",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             ephemeralStorage: {
                 serializedName: "ephemeralStorage",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const VolumeMount = {
     type: {
@@ -6843,23 +7024,23 @@ const VolumeMount = {
             volumeName: {
                 serializedName: "volumeName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             mountPath: {
                 serializedName: "mountPath",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             subPath: {
                 serializedName: "subPath",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ContainerAppProbe = {
     type: {
@@ -6869,61 +7050,61 @@ const ContainerAppProbe = {
             failureThreshold: {
                 serializedName: "failureThreshold",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             httpGet: {
                 serializedName: "httpGet",
                 type: {
                     name: "Composite",
-                    className: "ContainerAppProbeHttpGet"
-                }
+                    className: "ContainerAppProbeHttpGet",
+                },
             },
             initialDelaySeconds: {
                 serializedName: "initialDelaySeconds",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             periodSeconds: {
                 serializedName: "periodSeconds",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             successThreshold: {
                 serializedName: "successThreshold",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             tcpSocket: {
                 serializedName: "tcpSocket",
                 type: {
                     name: "Composite",
-                    className: "ContainerAppProbeTcpSocket"
-                }
+                    className: "ContainerAppProbeTcpSocket",
+                },
             },
             terminationGracePeriodSeconds: {
                 serializedName: "terminationGracePeriodSeconds",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             timeoutSeconds: {
                 serializedName: "timeoutSeconds",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             type: {
                 serializedName: "type",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ContainerAppProbeHttpGet = {
     type: {
@@ -6933,8 +7114,8 @@ const ContainerAppProbeHttpGet = {
             host: {
                 serializedName: "host",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             httpHeaders: {
                 serializedName: "httpHeaders",
@@ -6943,32 +7124,32 @@ const ContainerAppProbeHttpGet = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ContainerAppProbeHttpGetHttpHeadersItem"
-                        }
-                    }
-                }
+                            className: "ContainerAppProbeHttpGetHttpHeadersItem",
+                        },
+                    },
+                },
             },
             path: {
                 serializedName: "path",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             port: {
                 serializedName: "port",
                 required: true,
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             scheme: {
                 serializedName: "scheme",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ContainerAppProbeHttpGetHttpHeadersItem = {
     type: {
@@ -6979,18 +7160,18 @@ const ContainerAppProbeHttpGetHttpHeadersItem = {
                 serializedName: "name",
                 required: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             value: {
                 serializedName: "value",
                 required: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ContainerAppProbeTcpSocket = {
     type: {
@@ -7000,18 +7181,18 @@ const ContainerAppProbeTcpSocket = {
             host: {
                 serializedName: "host",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             port: {
                 serializedName: "port",
                 required: true,
                 type: {
-                    name: "Number"
-                }
-            }
-        }
-    }
+                    name: "Number",
+                },
+            },
+        },
+    },
 };
 const Scale = {
     type: {
@@ -7021,15 +7202,15 @@ const Scale = {
             minReplicas: {
                 serializedName: "minReplicas",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             maxReplicas: {
                 defaultValue: 10,
                 serializedName: "maxReplicas",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             rules: {
                 serializedName: "rules",
@@ -7038,13 +7219,13 @@ const Scale = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ScaleRule"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "ScaleRule",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const ScaleRule = {
     type: {
@@ -7054,39 +7235,39 @@ const ScaleRule = {
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             azureQueue: {
                 serializedName: "azureQueue",
                 type: {
                     name: "Composite",
-                    className: "QueueScaleRule"
-                }
+                    className: "QueueScaleRule",
+                },
             },
             custom: {
                 serializedName: "custom",
                 type: {
                     name: "Composite",
-                    className: "CustomScaleRule"
-                }
+                    className: "CustomScaleRule",
+                },
             },
             http: {
                 serializedName: "http",
                 type: {
                     name: "Composite",
-                    className: "HttpScaleRule"
-                }
+                    className: "HttpScaleRule",
+                },
             },
             tcp: {
                 serializedName: "tcp",
                 type: {
                     name: "Composite",
-                    className: "TcpScaleRule"
-                }
-            }
-        }
-    }
+                    className: "TcpScaleRule",
+                },
+            },
+        },
+    },
 };
 const QueueScaleRule = {
     type: {
@@ -7096,14 +7277,14 @@ const QueueScaleRule = {
             queueName: {
                 serializedName: "queueName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             queueLength: {
                 serializedName: "queueLength",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             auth: {
                 serializedName: "auth",
@@ -7112,13 +7293,13 @@ const QueueScaleRule = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ScaleRuleAuth"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "ScaleRuleAuth",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const ScaleRuleAuth = {
     type: {
@@ -7128,17 +7309,17 @@ const ScaleRuleAuth = {
             secretRef: {
                 serializedName: "secretRef",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             triggerParameter: {
                 serializedName: "triggerParameter",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const CustomScaleRule = {
     type: {
@@ -7148,15 +7329,15 @@ const CustomScaleRule = {
             type: {
                 serializedName: "type",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             metadata: {
                 serializedName: "metadata",
                 type: {
                     name: "Dictionary",
-                    value: { type: { name: "String" } }
-                }
+                    value: { type: { name: "String" } },
+                },
             },
             auth: {
                 serializedName: "auth",
@@ -7165,13 +7346,13 @@ const CustomScaleRule = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ScaleRuleAuth"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "ScaleRuleAuth",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const HttpScaleRule = {
     type: {
@@ -7182,8 +7363,8 @@ const HttpScaleRule = {
                 serializedName: "metadata",
                 type: {
                     name: "Dictionary",
-                    value: { type: { name: "String" } }
-                }
+                    value: { type: { name: "String" } },
+                },
             },
             auth: {
                 serializedName: "auth",
@@ -7192,13 +7373,13 @@ const HttpScaleRule = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ScaleRuleAuth"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "ScaleRuleAuth",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const TcpScaleRule = {
     type: {
@@ -7209,8 +7390,8 @@ const TcpScaleRule = {
                 serializedName: "metadata",
                 type: {
                     name: "Dictionary",
-                    value: { type: { name: "String" } }
-                }
+                    value: { type: { name: "String" } },
+                },
             },
             auth: {
                 serializedName: "auth",
@@ -7219,13 +7400,13 @@ const TcpScaleRule = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ScaleRuleAuth"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "ScaleRuleAuth",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const Volume = {
     type: {
@@ -7235,20 +7416,20 @@ const Volume = {
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             storageType: {
                 serializedName: "storageType",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             storageName: {
                 serializedName: "storageName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             secrets: {
                 serializedName: "secrets",
@@ -7257,19 +7438,19 @@ const Volume = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "SecretVolumeItem"
-                        }
-                    }
-                }
+                            className: "SecretVolumeItem",
+                        },
+                    },
+                },
             },
             mountOptions: {
                 serializedName: "mountOptions",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const SecretVolumeItem = {
     type: {
@@ -7279,17 +7460,17 @@ const SecretVolumeItem = {
             secretRef: {
                 serializedName: "secretRef",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             path: {
                 serializedName: "path",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ServiceBind = {
     type: {
@@ -7299,17 +7480,17 @@ const ServiceBind = {
             serviceId: {
                 serializedName: "serviceId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const CustomHostnameAnalysisResult = {
     type: {
@@ -7320,51 +7501,51 @@ const CustomHostnameAnalysisResult = {
                 serializedName: "hostName",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             isHostnameAlreadyVerified: {
                 serializedName: "isHostnameAlreadyVerified",
                 readOnly: true,
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             customDomainVerificationTest: {
                 serializedName: "customDomainVerificationTest",
                 readOnly: true,
                 type: {
                     name: "Enum",
-                    allowedValues: ["Passed", "Failed", "Skipped"]
-                }
+                    allowedValues: ["Passed", "Failed", "Skipped"],
+                },
             },
             customDomainVerificationFailureInfo: {
                 serializedName: "customDomainVerificationFailureInfo",
                 type: {
                     name: "Composite",
-                    className: "CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo"
-                }
+                    className: "CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo",
+                },
             },
             hasConflictOnManagedEnvironment: {
                 serializedName: "hasConflictOnManagedEnvironment",
                 readOnly: true,
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             conflictWithEnvironmentCustomDomain: {
                 serializedName: "conflictWithEnvironmentCustomDomain",
                 readOnly: true,
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             conflictingContainerAppResourceId: {
                 serializedName: "conflictingContainerAppResourceId",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             cNameRecords: {
                 serializedName: "cNameRecords",
@@ -7372,10 +7553,10 @@ const CustomHostnameAnalysisResult = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             txtRecords: {
                 serializedName: "txtRecords",
@@ -7383,10 +7564,10 @@ const CustomHostnameAnalysisResult = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             aRecords: {
                 serializedName: "aRecords",
@@ -7394,10 +7575,10 @@ const CustomHostnameAnalysisResult = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             alternateCNameRecords: {
                 serializedName: "alternateCNameRecords",
@@ -7405,10 +7586,10 @@ const CustomHostnameAnalysisResult = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             alternateTxtRecords: {
                 serializedName: "alternateTxtRecords",
@@ -7416,13 +7597,13 @@ const CustomHostnameAnalysisResult = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            name: "String",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo = {
     type: {
@@ -7433,22 +7614,22 @@ const CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo = {
                 serializedName: "code",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             message: {
                 serializedName: "message",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             target: {
                 serializedName: "target",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             details: {
                 serializedName: "details",
@@ -7457,13 +7638,13 @@ const CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem = {
     type: {
@@ -7474,25 +7655,25 @@ const CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem
                 serializedName: "code",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             message: {
                 serializedName: "message",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             target: {
                 serializedName: "target",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const SecretsCollection = {
     type: {
@@ -7507,13 +7688,13 @@ const SecretsCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ContainerAppSecret"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "ContainerAppSecret",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const ContainerAppSecret = {
     type: {
@@ -7524,32 +7705,32 @@ const ContainerAppSecret = {
                 serializedName: "name",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             value: {
                 serializedName: "value",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             identity: {
                 serializedName: "identity",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             keyVaultUrl: {
                 serializedName: "keyVaultUrl",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const RevisionCollection = {
     type: {
@@ -7564,20 +7745,20 @@ const RevisionCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "Revision"
-                        }
-                    }
-                }
+                            className: "Revision",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ReplicaContainer = {
     type: {
@@ -7587,63 +7768,63 @@ const ReplicaContainer = {
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             containerId: {
                 serializedName: "containerId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             ready: {
                 serializedName: "ready",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             started: {
                 serializedName: "started",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             restartCount: {
                 serializedName: "restartCount",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             runningState: {
                 serializedName: "runningState",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             runningStateDetails: {
                 serializedName: "runningStateDetails",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             logStreamEndpoint: {
                 serializedName: "logStreamEndpoint",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             execEndpoint: {
                 serializedName: "execEndpoint",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ReplicaCollection = {
     type: {
@@ -7658,13 +7839,13 @@ const ReplicaCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "Replica"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "Replica",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const DiagnosticsCollection = {
     type: {
@@ -7679,20 +7860,20 @@ const DiagnosticsCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "Diagnostics"
-                        }
-                    }
-                }
+                            className: "Diagnostics",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const DiagnosticsProperties = {
     type: {
@@ -7703,8 +7884,8 @@ const DiagnosticsProperties = {
                 serializedName: "metadata",
                 type: {
                     name: "Composite",
-                    className: "DiagnosticsDefinition"
-                }
+                    className: "DiagnosticsDefinition",
+                },
             },
             dataset: {
                 serializedName: "dataset",
@@ -7713,27 +7894,27 @@ const DiagnosticsProperties = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "DiagnosticsDataApiResponse"
-                        }
-                    }
-                }
+                            className: "DiagnosticsDataApiResponse",
+                        },
+                    },
+                },
             },
             status: {
                 serializedName: "status",
                 type: {
                     name: "Composite",
-                    className: "DiagnosticsStatus"
-                }
+                    className: "DiagnosticsStatus",
+                },
             },
             dataProviderMetadata: {
                 serializedName: "dataProviderMetadata",
                 type: {
                     name: "Composite",
-                    className: "DiagnosticDataProviderMetadata"
-                }
-            }
-        }
-    }
+                    className: "DiagnosticDataProviderMetadata",
+                },
+            },
+        },
+    },
 };
 const DiagnosticsDefinition = {
     type: {
@@ -7744,36 +7925,36 @@ const DiagnosticsDefinition = {
                 serializedName: "id",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             name: {
                 serializedName: "name",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             description: {
                 serializedName: "description",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             author: {
                 serializedName: "author",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             category: {
                 serializedName: "category",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             supportTopicList: {
                 serializedName: "supportTopicList",
@@ -7782,10 +7963,10 @@ const DiagnosticsDefinition = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "DiagnosticSupportTopic"
-                        }
-                    }
-                }
+                            className: "DiagnosticSupportTopic",
+                        },
+                    },
+                },
             },
             analysisTypes: {
                 serializedName: "analysisTypes",
@@ -7793,27 +7974,27 @@ const DiagnosticsDefinition = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             type: {
                 serializedName: "type",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             score: {
                 serializedName: "score",
                 readOnly: true,
                 type: {
-                    name: "Number"
-                }
-            }
-        }
-    }
+                    name: "Number",
+                },
+            },
+        },
+    },
 };
 const DiagnosticSupportTopic = {
     type: {
@@ -7824,18 +8005,18 @@ const DiagnosticSupportTopic = {
                 serializedName: "id",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             pesId: {
                 serializedName: "pesId",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const DiagnosticsDataApiResponse = {
     type: {
@@ -7846,18 +8027,18 @@ const DiagnosticsDataApiResponse = {
                 serializedName: "table",
                 type: {
                     name: "Composite",
-                    className: "DiagnosticDataTableResponseObject"
-                }
+                    className: "DiagnosticDataTableResponseObject",
+                },
             },
             renderingProperties: {
                 serializedName: "renderingProperties",
                 type: {
                     name: "Composite",
-                    className: "DiagnosticRendering"
-                }
-            }
-        }
-    }
+                    className: "DiagnosticRendering",
+                },
+            },
+        },
+    },
 };
 const DiagnosticDataTableResponseObject = {
     type: {
@@ -7867,8 +8048,8 @@ const DiagnosticDataTableResponseObject = {
             tableName: {
                 serializedName: "tableName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             columns: {
                 serializedName: "columns",
@@ -7877,10 +8058,10 @@ const DiagnosticDataTableResponseObject = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "DiagnosticDataTableResponseColumn"
-                        }
-                    }
-                }
+                            className: "DiagnosticDataTableResponseColumn",
+                        },
+                    },
+                },
             },
             rows: {
                 serializedName: "rows",
@@ -7889,13 +8070,13 @@ const DiagnosticDataTableResponseObject = {
                     element: {
                         type: {
                             name: "Dictionary",
-                            value: { type: { name: "any" } }
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            value: { type: { name: "any" } },
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const DiagnosticDataTableResponseColumn = {
     type: {
@@ -7905,23 +8086,23 @@ const DiagnosticDataTableResponseColumn = {
             columnName: {
                 serializedName: "columnName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             dataType: {
                 serializedName: "dataType",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             columnType: {
                 serializedName: "columnType",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const DiagnosticRendering = {
     type: {
@@ -7931,29 +8112,29 @@ const DiagnosticRendering = {
             type: {
                 serializedName: "type",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             title: {
                 serializedName: "title",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             description: {
                 serializedName: "description",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             isVisible: {
                 serializedName: "isVisible",
                 type: {
-                    name: "Boolean"
-                }
-            }
-        }
-    }
+                    name: "Boolean",
+                },
+            },
+        },
+    },
 };
 const DiagnosticsStatus = {
     type: {
@@ -7963,17 +8144,17 @@ const DiagnosticsStatus = {
             message: {
                 serializedName: "message",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             statusId: {
                 serializedName: "statusId",
                 type: {
-                    name: "Number"
-                }
-            }
-        }
-    }
+                    name: "Number",
+                },
+            },
+        },
+    },
 };
 const DiagnosticDataProviderMetadata = {
     type: {
@@ -7983,8 +8164,8 @@ const DiagnosticDataProviderMetadata = {
             providerName: {
                 serializedName: "providerName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             propertyBag: {
                 serializedName: "propertyBag",
@@ -7993,13 +8174,13 @@ const DiagnosticDataProviderMetadata = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "DiagnosticDataProviderMetadataPropertyBagItem"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "DiagnosticDataProviderMetadataPropertyBagItem",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const DiagnosticDataProviderMetadataPropertyBagItem = {
     type: {
@@ -8009,17 +8190,17 @@ const DiagnosticDataProviderMetadataPropertyBagItem = {
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             value: {
                 serializedName: "value",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const VnetConfiguration = {
     type: {
@@ -8029,35 +8210,35 @@ const VnetConfiguration = {
             internal: {
                 serializedName: "internal",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             infrastructureSubnetId: {
                 serializedName: "infrastructureSubnetId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             dockerBridgeCidr: {
                 serializedName: "dockerBridgeCidr",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             platformReservedCidr: {
                 serializedName: "platformReservedCidr",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             platformReservedDnsIP: {
                 serializedName: "platformReservedDnsIP",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const AppLogsConfiguration = {
     type: {
@@ -8067,18 +8248,18 @@ const AppLogsConfiguration = {
             destination: {
                 serializedName: "destination",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             logAnalyticsConfiguration: {
                 serializedName: "logAnalyticsConfiguration",
                 type: {
                     name: "Composite",
-                    className: "LogAnalyticsConfiguration"
-                }
-            }
-        }
-    }
+                    className: "LogAnalyticsConfiguration",
+                },
+            },
+        },
+    },
 };
 const LogAnalyticsConfiguration = {
     type: {
@@ -8088,17 +8269,17 @@ const LogAnalyticsConfiguration = {
             customerId: {
                 serializedName: "customerId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             sharedKey: {
                 serializedName: "sharedKey",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const WorkloadProfile = {
     type: {
@@ -8109,30 +8290,30 @@ const WorkloadProfile = {
                 serializedName: "name",
                 required: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             workloadProfileType: {
                 serializedName: "workloadProfileType",
                 required: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             minimumCount: {
                 serializedName: "minimumCount",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             maximumCount: {
                 serializedName: "maximumCount",
                 type: {
-                    name: "Number"
-                }
-            }
-        }
-    }
+                    name: "Number",
+                },
+            },
+        },
+    },
 };
 const KedaConfiguration = {
     type: {
@@ -8143,11 +8324,11 @@ const KedaConfiguration = {
                 serializedName: "version",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const DaprConfiguration = {
     type: {
@@ -8158,11 +8339,11 @@ const DaprConfiguration = {
                 serializedName: "version",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ManagedEnvironmentPropertiesPeerAuthentication = {
     type: {
@@ -8173,11 +8354,11 @@ const ManagedEnvironmentPropertiesPeerAuthentication = {
                 serializedName: "mtls",
                 type: {
                     name: "Composite",
-                    className: "Mtls"
-                }
-            }
-        }
-    }
+                    className: "Mtls",
+                },
+            },
+        },
+    },
 };
 const Mtls = {
     type: {
@@ -8187,11 +8368,311 @@ const Mtls = {
             enabled: {
                 serializedName: "enabled",
                 type: {
-                    name: "Boolean"
-                }
-            }
-        }
-    }
+                    name: "Boolean",
+                },
+            },
+        },
+    },
+};
+const ManagedEnvironmentPropertiesPeerTrafficConfiguration = {
+    type: {
+        name: "Composite",
+        className: "ManagedEnvironmentPropertiesPeerTrafficConfiguration",
+        modelProperties: {
+            encryption: {
+                serializedName: "encryption",
+                type: {
+                    name: "Composite",
+                    className: "ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption",
+                },
+            },
+        },
+    },
+};
+const ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption = {
+    type: {
+        name: "Composite",
+        className: "ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption",
+        modelProperties: {
+            enabled: {
+                serializedName: "enabled",
+                type: {
+                    name: "Boolean",
+                },
+            },
+        },
+    },
+};
+const JobConfiguration = {
+    type: {
+        name: "Composite",
+        className: "JobConfiguration",
+        modelProperties: {
+            secrets: {
+                serializedName: "secrets",
+                type: {
+                    name: "Sequence",
+                    element: {
+                        type: {
+                            name: "Composite",
+                            className: "Secret",
+                        },
+                    },
+                },
+            },
+            triggerType: {
+                defaultValue: "Manual",
+                serializedName: "triggerType",
+                required: true,
+                type: {
+                    name: "String",
+                },
+            },
+            replicaTimeout: {
+                serializedName: "replicaTimeout",
+                required: true,
+                type: {
+                    name: "Number",
+                },
+            },
+            replicaRetryLimit: {
+                serializedName: "replicaRetryLimit",
+                type: {
+                    name: "Number",
+                },
+            },
+            manualTriggerConfig: {
+                serializedName: "manualTriggerConfig",
+                type: {
+                    name: "Composite",
+                    className: "JobConfigurationManualTriggerConfig",
+                },
+            },
+            scheduleTriggerConfig: {
+                serializedName: "scheduleTriggerConfig",
+                type: {
+                    name: "Composite",
+                    className: "JobConfigurationScheduleTriggerConfig",
+                },
+            },
+            eventTriggerConfig: {
+                serializedName: "eventTriggerConfig",
+                type: {
+                    name: "Composite",
+                    className: "JobConfigurationEventTriggerConfig",
+                },
+            },
+            registries: {
+                serializedName: "registries",
+                type: {
+                    name: "Sequence",
+                    element: {
+                        type: {
+                            name: "Composite",
+                            className: "RegistryCredentials",
+                        },
+                    },
+                },
+            },
+        },
+    },
+};
+const JobConfigurationManualTriggerConfig = {
+    type: {
+        name: "Composite",
+        className: "JobConfigurationManualTriggerConfig",
+        modelProperties: {
+            replicaCompletionCount: {
+                serializedName: "replicaCompletionCount",
+                type: {
+                    name: "Number",
+                },
+            },
+            parallelism: {
+                serializedName: "parallelism",
+                type: {
+                    name: "Number",
+                },
+            },
+        },
+    },
+};
+const JobConfigurationScheduleTriggerConfig = {
+    type: {
+        name: "Composite",
+        className: "JobConfigurationScheduleTriggerConfig",
+        modelProperties: {
+            replicaCompletionCount: {
+                serializedName: "replicaCompletionCount",
+                type: {
+                    name: "Number",
+                },
+            },
+            cronExpression: {
+                serializedName: "cronExpression",
+                required: true,
+                type: {
+                    name: "String",
+                },
+            },
+            parallelism: {
+                serializedName: "parallelism",
+                type: {
+                    name: "Number",
+                },
+            },
+        },
+    },
+};
+const JobConfigurationEventTriggerConfig = {
+    type: {
+        name: "Composite",
+        className: "JobConfigurationEventTriggerConfig",
+        modelProperties: {
+            replicaCompletionCount: {
+                serializedName: "replicaCompletionCount",
+                type: {
+                    name: "Number",
+                },
+            },
+            parallelism: {
+                serializedName: "parallelism",
+                type: {
+                    name: "Number",
+                },
+            },
+            scale: {
+                serializedName: "scale",
+                type: {
+                    name: "Composite",
+                    className: "JobScale",
+                },
+            },
+        },
+    },
+};
+const JobScale = {
+    type: {
+        name: "Composite",
+        className: "JobScale",
+        modelProperties: {
+            pollingInterval: {
+                serializedName: "pollingInterval",
+                type: {
+                    name: "Number",
+                },
+            },
+            minExecutions: {
+                defaultValue: 0,
+                serializedName: "minExecutions",
+                type: {
+                    name: "Number",
+                },
+            },
+            maxExecutions: {
+                defaultValue: 100,
+                serializedName: "maxExecutions",
+                type: {
+                    name: "Number",
+                },
+            },
+            rules: {
+                serializedName: "rules",
+                type: {
+                    name: "Sequence",
+                    element: {
+                        type: {
+                            name: "Composite",
+                            className: "JobScaleRule",
+                        },
+                    },
+                },
+            },
+        },
+    },
+};
+const JobScaleRule = {
+    type: {
+        name: "Composite",
+        className: "JobScaleRule",
+        modelProperties: {
+            name: {
+                serializedName: "name",
+                type: {
+                    name: "String",
+                },
+            },
+            type: {
+                serializedName: "type",
+                type: {
+                    name: "String",
+                },
+            },
+            metadata: {
+                serializedName: "metadata",
+                type: {
+                    name: "Dictionary",
+                    value: { type: { name: "any" } },
+                },
+            },
+            auth: {
+                serializedName: "auth",
+                type: {
+                    name: "Sequence",
+                    element: {
+                        type: {
+                            name: "Composite",
+                            className: "ScaleRuleAuth",
+                        },
+                    },
+                },
+            },
+        },
+    },
+};
+const JobTemplate = {
+    type: {
+        name: "Composite",
+        className: "JobTemplate",
+        modelProperties: {
+            initContainers: {
+                serializedName: "initContainers",
+                type: {
+                    name: "Sequence",
+                    element: {
+                        type: {
+                            name: "Composite",
+                            className: "InitContainer",
+                        },
+                    },
+                },
+            },
+            containers: {
+                serializedName: "containers",
+                type: {
+                    name: "Sequence",
+                    element: {
+                        type: {
+                            name: "Composite",
+                            className: "Container",
+                        },
+                    },
+                },
+            },
+            volumes: {
+                serializedName: "volumes",
+                type: {
+                    name: "Sequence",
+                    element: {
+                        type: {
+                            name: "Composite",
+                            className: "Volume",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const AvailableOperations = {
     type: {
@@ -8205,19 +8686,19 @@ const AvailableOperations = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "OperationDetail"
-                        }
-                    }
-                }
+                            className: "OperationDetail",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const OperationDetail = {
     type: {
@@ -8227,30 +8708,30 @@ const OperationDetail = {
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             isDataAction: {
                 serializedName: "isDataAction",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             },
             display: {
                 serializedName: "display",
                 type: {
                     name: "Composite",
-                    className: "OperationDisplay"
-                }
+                    className: "OperationDisplay",
+                },
             },
             origin: {
                 serializedName: "origin",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const OperationDisplay = {
     type: {
@@ -8260,29 +8741,29 @@ const OperationDisplay = {
             provider: {
                 serializedName: "provider",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             resource: {
                 serializedName: "resource",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             operation: {
                 serializedName: "operation",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             description: {
                 serializedName: "description",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const JobsCollection = {
     type: {
@@ -8297,291 +8778,20 @@ const JobsCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "Job"
-                        }
-                    }
-                }
+                            className: "Job",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
-};
-const JobConfiguration = {
-    type: {
-        name: "Composite",
-        className: "JobConfiguration",
-        modelProperties: {
-            secrets: {
-                serializedName: "secrets",
-                type: {
-                    name: "Sequence",
-                    element: {
-                        type: {
-                            name: "Composite",
-                            className: "Secret"
-                        }
-                    }
-                }
+                    name: "String",
+                },
             },
-            triggerType: {
-                defaultValue: "Manual",
-                serializedName: "triggerType",
-                required: true,
-                type: {
-                    name: "String"
-                }
-            },
-            replicaTimeout: {
-                serializedName: "replicaTimeout",
-                required: true,
-                type: {
-                    name: "Number"
-                }
-            },
-            replicaRetryLimit: {
-                serializedName: "replicaRetryLimit",
-                type: {
-                    name: "Number"
-                }
-            },
-            manualTriggerConfig: {
-                serializedName: "manualTriggerConfig",
-                type: {
-                    name: "Composite",
-                    className: "JobConfigurationManualTriggerConfig"
-                }
-            },
-            scheduleTriggerConfig: {
-                serializedName: "scheduleTriggerConfig",
-                type: {
-                    name: "Composite",
-                    className: "JobConfigurationScheduleTriggerConfig"
-                }
-            },
-            eventTriggerConfig: {
-                serializedName: "eventTriggerConfig",
-                type: {
-                    name: "Composite",
-                    className: "JobConfigurationEventTriggerConfig"
-                }
-            },
-            registries: {
-                serializedName: "registries",
-                type: {
-                    name: "Sequence",
-                    element: {
-                        type: {
-                            name: "Composite",
-                            className: "RegistryCredentials"
-                        }
-                    }
-                }
-            }
-        }
-    }
-};
-const JobConfigurationManualTriggerConfig = {
-    type: {
-        name: "Composite",
-        className: "JobConfigurationManualTriggerConfig",
-        modelProperties: {
-            replicaCompletionCount: {
-                serializedName: "replicaCompletionCount",
-                type: {
-                    name: "Number"
-                }
-            },
-            parallelism: {
-                serializedName: "parallelism",
-                type: {
-                    name: "Number"
-                }
-            }
-        }
-    }
-};
-const JobConfigurationScheduleTriggerConfig = {
-    type: {
-        name: "Composite",
-        className: "JobConfigurationScheduleTriggerConfig",
-        modelProperties: {
-            replicaCompletionCount: {
-                serializedName: "replicaCompletionCount",
-                type: {
-                    name: "Number"
-                }
-            },
-            cronExpression: {
-                serializedName: "cronExpression",
-                required: true,
-                type: {
-                    name: "String"
-                }
-            },
-            parallelism: {
-                serializedName: "parallelism",
-                type: {
-                    name: "Number"
-                }
-            }
-        }
-    }
-};
-const JobConfigurationEventTriggerConfig = {
-    type: {
-        name: "Composite",
-        className: "JobConfigurationEventTriggerConfig",
-        modelProperties: {
-            replicaCompletionCount: {
-                serializedName: "replicaCompletionCount",
-                type: {
-                    name: "Number"
-                }
-            },
-            parallelism: {
-                serializedName: "parallelism",
-                type: {
-                    name: "Number"
-                }
-            },
-            scale: {
-                serializedName: "scale",
-                type: {
-                    name: "Composite",
-                    className: "JobScale"
-                }
-            }
-        }
-    }
-};
-const JobScale = {
-    type: {
-        name: "Composite",
-        className: "JobScale",
-        modelProperties: {
-            pollingInterval: {
-                serializedName: "pollingInterval",
-                type: {
-                    name: "Number"
-                }
-            },
-            minExecutions: {
-                defaultValue: 0,
-                serializedName: "minExecutions",
-                type: {
-                    name: "Number"
-                }
-            },
-            maxExecutions: {
-                defaultValue: 100,
-                serializedName: "maxExecutions",
-                type: {
-                    name: "Number"
-                }
-            },
-            rules: {
-                serializedName: "rules",
-                type: {
-                    name: "Sequence",
-                    element: {
-                        type: {
-                            name: "Composite",
-                            className: "JobScaleRule"
-                        }
-                    }
-                }
-            }
-        }
-    }
-};
-const JobScaleRule = {
-    type: {
-        name: "Composite",
-        className: "JobScaleRule",
-        modelProperties: {
-            name: {
-                serializedName: "name",
-                type: {
-                    name: "String"
-                }
-            },
-            type: {
-                serializedName: "type",
-                type: {
-                    name: "String"
-                }
-            },
-            metadata: {
-                serializedName: "metadata",
-                type: {
-                    name: "Dictionary",
-                    value: { type: { name: "any" } }
-                }
-            },
-            auth: {
-                serializedName: "auth",
-                type: {
-                    name: "Sequence",
-                    element: {
-                        type: {
-                            name: "Composite",
-                            className: "ScaleRuleAuth"
-                        }
-                    }
-                }
-            }
-        }
-    }
-};
-const JobTemplate = {
-    type: {
-        name: "Composite",
-        className: "JobTemplate",
-        modelProperties: {
-            initContainers: {
-                serializedName: "initContainers",
-                type: {
-                    name: "Sequence",
-                    element: {
-                        type: {
-                            name: "Composite",
-                            className: "InitContainer"
-                        }
-                    }
-                }
-            },
-            containers: {
-                serializedName: "containers",
-                type: {
-                    name: "Sequence",
-                    element: {
-                        type: {
-                            name: "Composite",
-                            className: "Container"
-                        }
-                    }
-                }
-            },
-            volumes: {
-                serializedName: "volumes",
-                type: {
-                    name: "Sequence",
-                    element: {
-                        type: {
-                            name: "Composite",
-                            className: "Volume"
-                        }
-                    }
-                }
-            }
-        }
-    }
+        },
+    },
 };
 const JobPatchProperties = {
     type: {
@@ -8592,25 +8802,25 @@ const JobPatchProperties = {
                 serializedName: "identity",
                 type: {
                     name: "Composite",
-                    className: "ManagedServiceIdentity"
-                }
+                    className: "ManagedServiceIdentity",
+                },
             },
             tags: {
                 serializedName: "tags",
                 type: {
                     name: "Dictionary",
-                    value: { type: { name: "String" } }
-                }
+                    value: { type: { name: "String" } },
+                },
             },
             properties: {
                 serializedName: "properties",
                 type: {
                     name: "Composite",
-                    className: "JobPatchPropertiesProperties"
-                }
-            }
-        }
-    }
+                    className: "JobPatchPropertiesProperties",
+                },
+            },
+        },
+    },
 };
 const JobPatchPropertiesProperties = {
     type: {
@@ -8620,22 +8830,22 @@ const JobPatchPropertiesProperties = {
             environmentId: {
                 serializedName: "environmentId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             configuration: {
                 serializedName: "configuration",
                 type: {
                     name: "Composite",
-                    className: "JobConfiguration"
-                }
+                    className: "JobConfiguration",
+                },
             },
             template: {
                 serializedName: "template",
                 type: {
                     name: "Composite",
-                    className: "JobTemplate"
-                }
+                    className: "JobTemplate",
+                },
             },
             outboundIpAddresses: {
                 serializedName: "outboundIpAddresses",
@@ -8643,19 +8853,19 @@ const JobPatchPropertiesProperties = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             eventStreamEndpoint: {
                 serializedName: "eventStreamEndpoint",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const JobExecutionTemplate = {
     type: {
@@ -8669,10 +8879,10 @@ const JobExecutionTemplate = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "JobExecutionContainer"
-                        }
-                    }
-                }
+                            className: "JobExecutionContainer",
+                        },
+                    },
+                },
             },
             initContainers: {
                 serializedName: "initContainers",
@@ -8681,13 +8891,13 @@ const JobExecutionTemplate = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "JobExecutionContainer"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "JobExecutionContainer",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const JobExecutionContainer = {
     type: {
@@ -8697,14 +8907,14 @@ const JobExecutionContainer = {
             image: {
                 serializedName: "image",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             command: {
                 serializedName: "command",
@@ -8712,10 +8922,10 @@ const JobExecutionContainer = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             args: {
                 serializedName: "args",
@@ -8723,10 +8933,10 @@ const JobExecutionContainer = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             },
             env: {
                 serializedName: "env",
@@ -8735,20 +8945,20 @@ const JobExecutionContainer = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "EnvironmentVar"
-                        }
-                    }
-                }
+                            className: "EnvironmentVar",
+                        },
+                    },
+                },
             },
             resources: {
                 serializedName: "resources",
                 type: {
                     name: "Composite",
-                    className: "ContainerResources"
-                }
-            }
-        }
-    }
+                    className: "ContainerResources",
+                },
+            },
+        },
+    },
 };
 const JobExecutionBase = {
     type: {
@@ -8758,17 +8968,17 @@ const JobExecutionBase = {
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             id: {
                 serializedName: "id",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ContainerAppJobExecutions = {
     type: {
@@ -8783,20 +8993,20 @@ const ContainerAppJobExecutions = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "JobExecution"
-                        }
-                    }
-                }
+                            className: "JobExecution",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const JobExecution = {
     type: {
@@ -8806,49 +9016,49 @@ const JobExecution = {
             name: {
                 serializedName: "name",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             id: {
                 serializedName: "id",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             type: {
                 serializedName: "type",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             status: {
-                serializedName: "status",
+                serializedName: "properties.status",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             startTime: {
-                serializedName: "startTime",
+                serializedName: "properties.startTime",
                 type: {
-                    name: "DateTime"
-                }
+                    name: "DateTime",
+                },
             },
             endTime: {
-                serializedName: "endTime",
+                serializedName: "properties.endTime",
                 type: {
-                    name: "DateTime"
-                }
+                    name: "DateTime",
+                },
             },
             template: {
-                serializedName: "template",
+                serializedName: "properties.template",
                 type: {
                     name: "Composite",
-                    className: "JobExecutionTemplate"
-                }
-            }
-        }
-    }
+                    className: "JobExecutionTemplate",
+                },
+            },
+        },
+    },
 };
 const JobSecretsCollection = {
     type: {
@@ -8863,13 +9073,13 @@ const JobSecretsCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "Secret"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "Secret",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const ManagedEnvironmentsCollection = {
     type: {
@@ -8884,20 +9094,20 @@ const ManagedEnvironmentsCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ManagedEnvironment"
-                        }
-                    }
-                }
+                            className: "ManagedEnvironment",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ManagedCertificateProperties = {
     type: {
@@ -8908,37 +9118,37 @@ const ManagedCertificateProperties = {
                 serializedName: "provisioningState",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             subjectName: {
                 serializedName: "subjectName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             error: {
                 serializedName: "error",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             domainControlValidation: {
                 serializedName: "domainControlValidation",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             validationToken: {
                 serializedName: "validationToken",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ManagedCertificatePatch = {
     type: {
@@ -8949,11 +9159,11 @@ const ManagedCertificatePatch = {
                 serializedName: "tags",
                 type: {
                     name: "Dictionary",
-                    value: { type: { name: "String" } }
-                }
-            }
-        }
-    }
+                    value: { type: { name: "String" } },
+                },
+            },
+        },
+    },
 };
 const ManagedCertificateCollection = {
     type: {
@@ -8968,20 +9178,20 @@ const ManagedCertificateCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ManagedCertificate"
-                        }
-                    }
-                }
+                            className: "ManagedCertificate",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const WorkloadProfileStatesCollection = {
     type: {
@@ -8996,20 +9206,20 @@ const WorkloadProfileStatesCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "WorkloadProfileStates"
-                        }
-                    }
-                }
+                            className: "WorkloadProfileStates",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const WorkloadProfileStatesProperties = {
     type: {
@@ -9019,23 +9229,23 @@ const WorkloadProfileStatesProperties = {
             minimumCount: {
                 serializedName: "minimumCount",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             maximumCount: {
                 serializedName: "maximumCount",
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             },
             currentCount: {
                 serializedName: "currentCount",
                 type: {
-                    name: "Number"
-                }
-            }
-        }
-    }
+                    name: "Number",
+                },
+            },
+        },
+    },
 };
 const ManagedEnvironmentStoragesCollection = {
     type: {
@@ -9050,13 +9260,13 @@ const ManagedEnvironmentStoragesCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ManagedEnvironmentStorage"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "ManagedEnvironmentStorage",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const ManagedEnvironmentStorageProperties = {
     type: {
@@ -9067,11 +9277,11 @@ const ManagedEnvironmentStorageProperties = {
                 serializedName: "azureFile",
                 type: {
                     name: "Composite",
-                    className: "AzureFileProperties"
-                }
-            }
-        }
-    }
+                    className: "AzureFileProperties",
+                },
+            },
+        },
+    },
 };
 const SourceControlCollection = {
     type: {
@@ -9086,20 +9296,20 @@ const SourceControlCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "SourceControl"
-                        }
-                    }
-                }
+                            className: "SourceControl",
+                        },
+                    },
+                },
             },
             nextLink: {
                 serializedName: "nextLink",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const GithubActionConfiguration = {
     type: {
@@ -9110,60 +9320,60 @@ const GithubActionConfiguration = {
                 serializedName: "registryInfo",
                 type: {
                     name: "Composite",
-                    className: "RegistryInfo"
-                }
+                    className: "RegistryInfo",
+                },
             },
             azureCredentials: {
                 serializedName: "azureCredentials",
                 type: {
                     name: "Composite",
-                    className: "AzureCredentials"
-                }
+                    className: "AzureCredentials",
+                },
             },
             contextPath: {
                 serializedName: "contextPath",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             githubPersonalAccessToken: {
                 serializedName: "githubPersonalAccessToken",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             image: {
                 serializedName: "image",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             publishType: {
                 serializedName: "publishType",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             os: {
                 serializedName: "os",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             runtimeStack: {
                 serializedName: "runtimeStack",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             runtimeVersion: {
                 serializedName: "runtimeVersion",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const RegistryInfo = {
     type: {
@@ -9173,23 +9383,23 @@ const RegistryInfo = {
             registryUrl: {
                 serializedName: "registryUrl",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             registryUserName: {
                 serializedName: "registryUserName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             registryPassword: {
                 serializedName: "registryPassword",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const AzureCredentials = {
     type: {
@@ -9199,35 +9409,118 @@ const AzureCredentials = {
             clientId: {
                 serializedName: "clientId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             clientSecret: {
                 serializedName: "clientSecret",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             tenantId: {
                 serializedName: "tenantId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             kind: {
                 serializedName: "kind",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             },
             subscriptionId: {
                 serializedName: "subscriptionId",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
+};
+const ListUsagesResult = {
+    type: {
+        name: "Composite",
+        className: "ListUsagesResult",
+        modelProperties: {
+            value: {
+                serializedName: "value",
+                type: {
+                    name: "Sequence",
+                    element: {
+                        type: {
+                            name: "Composite",
+                            className: "Usage",
+                        },
+                    },
+                },
+            },
+            nextLink: {
+                serializedName: "nextLink",
+                type: {
+                    name: "String",
+                },
+            },
+        },
+    },
+};
+const Usage = {
+    type: {
+        name: "Composite",
+        className: "Usage",
+        modelProperties: {
+            unit: {
+                defaultValue: "Count",
+                isConstant: true,
+                serializedName: "unit",
+                type: {
+                    name: "String",
+                },
+            },
+            currentValue: {
+                serializedName: "currentValue",
+                required: true,
+                type: {
+                    name: "Number",
+                },
+            },
+            limit: {
+                serializedName: "limit",
+                required: true,
+                type: {
+                    name: "Number",
+                },
+            },
+            name: {
+                serializedName: "name",
+                type: {
+                    name: "Composite",
+                    className: "UsageName",
+                },
+            },
+        },
+    },
+};
+const UsageName = {
+    type: {
+        name: "Composite",
+        className: "UsageName",
+        modelProperties: {
+            value: {
+                serializedName: "value",
+                type: {
+                    name: "String",
+                },
+            },
+            localizedValue: {
+                serializedName: "localizedValue",
+                type: {
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const JobExecutionNamesCollection = {
     type: {
@@ -9242,20 +9535,20 @@ const JobExecutionNamesCollection = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "JobExecutionBase"
-                        }
-                    }
-                }
-            }
-        }
-    }
+                            className: "JobExecutionBase",
+                        },
+                    },
+                },
+            },
+        },
+    },
 };
 const ProxyResource = {
     type: {
         name: "Composite",
         className: "ProxyResource",
-        modelProperties: Object.assign({}, Resource.type.modelProperties)
-    }
+        modelProperties: Object.assign({}, Resource.type.modelProperties),
+    },
 };
 const TrackedResource = {
     type: {
@@ -9265,23 +9558,23 @@ const TrackedResource = {
                 serializedName: "tags",
                 type: {
                     name: "Dictionary",
-                    value: { type: { name: "String" } }
-                }
+                    value: { type: { name: "String" } },
+                },
             }, location: {
                 serializedName: "location",
                 required: true,
                 type: {
-                    name: "String"
-                }
-            } })
-    }
+                    name: "String",
+                },
+            } }),
+    },
 };
 const InitContainer = {
     type: {
         name: "Composite",
         className: "InitContainer",
-        modelProperties: Object.assign({}, BaseContainer.type.modelProperties)
-    }
+        modelProperties: Object.assign({}, BaseContainer.type.modelProperties),
+    },
 };
 const Container = {
     type: {
@@ -9294,12 +9587,12 @@ const Container = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ContainerAppProbe"
-                        }
-                    }
-                }
-            } })
-    }
+                            className: "ContainerAppProbe",
+                        },
+                    },
+                },
+            } }),
+    },
 };
 const AuthConfig = {
     type: {
@@ -9309,34 +9602,40 @@ const AuthConfig = {
                 serializedName: "properties.platform",
                 type: {
                     name: "Composite",
-                    className: "AuthPlatform"
-                }
+                    className: "AuthPlatform",
+                },
             }, globalValidation: {
                 serializedName: "properties.globalValidation",
                 type: {
                     name: "Composite",
-                    className: "GlobalValidation"
-                }
+                    className: "GlobalValidation",
+                },
             }, identityProviders: {
                 serializedName: "properties.identityProviders",
                 type: {
                     name: "Composite",
-                    className: "IdentityProviders"
-                }
+                    className: "IdentityProviders",
+                },
             }, login: {
                 serializedName: "properties.login",
                 type: {
                     name: "Composite",
-                    className: "Login"
-                }
+                    className: "Login",
+                },
             }, httpSettings: {
                 serializedName: "properties.httpSettings",
                 type: {
                     name: "Composite",
-                    className: "HttpSettings"
-                }
-            } })
-    }
+                    className: "HttpSettings",
+                },
+            }, encryptionSettings: {
+                serializedName: "properties.encryptionSettings",
+                type: {
+                    name: "Composite",
+                    className: "EncryptionSettings",
+                },
+            } }),
+    },
 };
 const AvailableWorkloadProfile = {
     type: {
@@ -9345,16 +9644,16 @@ const AvailableWorkloadProfile = {
         modelProperties: Object.assign(Object.assign({}, ProxyResource.type.modelProperties), { location: {
                 serializedName: "location",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, properties: {
                 serializedName: "properties",
                 type: {
                     name: "Composite",
-                    className: "AvailableWorkloadProfileProperties"
-                }
-            } })
-    }
+                    className: "AvailableWorkloadProfileProperties",
+                },
+            } }),
+    },
 };
 const BillingMeter = {
     type: {
@@ -9363,16 +9662,16 @@ const BillingMeter = {
         modelProperties: Object.assign(Object.assign({}, ProxyResource.type.modelProperties), { location: {
                 serializedName: "location",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, properties: {
                 serializedName: "properties",
                 type: {
                     name: "Composite",
-                    className: "BillingMeterProperties"
-                }
-            } })
-    }
+                    className: "BillingMeterProperties",
+                },
+            } }),
+    },
 };
 const DaprComponent = {
     type: {
@@ -9381,24 +9680,24 @@ const DaprComponent = {
         modelProperties: Object.assign(Object.assign({}, ProxyResource.type.modelProperties), { componentType: {
                 serializedName: "properties.componentType",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, version: {
                 serializedName: "properties.version",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, ignoreErrors: {
                 defaultValue: false,
                 serializedName: "properties.ignoreErrors",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             }, initTimeout: {
                 serializedName: "properties.initTimeout",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, secrets: {
                 serializedName: "properties.secrets",
                 type: {
@@ -9406,15 +9705,15 @@ const DaprComponent = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "Secret"
-                        }
-                    }
-                }
+                            className: "Secret",
+                        },
+                    },
+                },
             }, secretStoreComponent: {
                 serializedName: "properties.secretStoreComponent",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, metadata: {
                 serializedName: "properties.metadata",
                 type: {
@@ -9422,22 +9721,22 @@ const DaprComponent = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "DaprMetadata"
-                        }
-                    }
-                }
+                            className: "DaprMetadata",
+                        },
+                    },
+                },
             }, scopes: {
                 serializedName: "properties.scopes",
                 type: {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
-            } })
-    }
+                            name: "String",
+                        },
+                    },
+                },
+            } }),
+    },
 };
 const ConnectedEnvironmentStorage = {
     type: {
@@ -9447,10 +9746,10 @@ const ConnectedEnvironmentStorage = {
                 serializedName: "properties",
                 type: {
                     name: "Composite",
-                    className: "ConnectedEnvironmentStorageProperties"
-                }
-            } })
-    }
+                    className: "ConnectedEnvironmentStorageProperties",
+                },
+            } }),
+    },
 };
 const Revision = {
     type: {
@@ -9460,70 +9759,70 @@ const Revision = {
                 serializedName: "properties.createdTime",
                 readOnly: true,
                 type: {
-                    name: "DateTime"
-                }
+                    name: "DateTime",
+                },
             }, lastActiveTime: {
                 serializedName: "properties.lastActiveTime",
                 readOnly: true,
                 type: {
-                    name: "DateTime"
-                }
+                    name: "DateTime",
+                },
             }, fqdn: {
                 serializedName: "properties.fqdn",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, template: {
                 serializedName: "properties.template",
                 type: {
                     name: "Composite",
-                    className: "Template"
-                }
+                    className: "Template",
+                },
             }, active: {
                 serializedName: "properties.active",
                 readOnly: true,
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             }, replicas: {
                 serializedName: "properties.replicas",
                 readOnly: true,
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             }, trafficWeight: {
                 serializedName: "properties.trafficWeight",
                 readOnly: true,
                 type: {
-                    name: "Number"
-                }
+                    name: "Number",
+                },
             }, provisioningError: {
                 serializedName: "properties.provisioningError",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, healthState: {
                 serializedName: "properties.healthState",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, provisioningState: {
                 serializedName: "properties.provisioningState",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, runningState: {
                 serializedName: "properties.runningState",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            } })
-    }
+                    name: "String",
+                },
+            } }),
+    },
 };
 const Replica = {
     type: {
@@ -9533,20 +9832,20 @@ const Replica = {
                 serializedName: "properties.createdTime",
                 readOnly: true,
                 type: {
-                    name: "DateTime"
-                }
+                    name: "DateTime",
+                },
             }, runningState: {
                 serializedName: "properties.runningState",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, runningStateDetails: {
                 serializedName: "properties.runningStateDetails",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, containers: {
                 serializedName: "properties.containers",
                 type: {
@@ -9554,10 +9853,10 @@ const Replica = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ReplicaContainer"
-                        }
-                    }
-                }
+                            className: "ReplicaContainer",
+                        },
+                    },
+                },
             }, initContainers: {
                 serializedName: "properties.initContainers",
                 type: {
@@ -9565,12 +9864,12 @@ const Replica = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "ReplicaContainer"
-                        }
-                    }
-                }
-            } })
-    }
+                            className: "ReplicaContainer",
+                        },
+                    },
+                },
+            } }),
+    },
 };
 const Diagnostics = {
     type: {
@@ -9580,10 +9879,10 @@ const Diagnostics = {
                 serializedName: "properties",
                 type: {
                     name: "Composite",
-                    className: "DiagnosticsProperties"
-                }
-            } })
-    }
+                    className: "DiagnosticsProperties",
+                },
+            } }),
+    },
 };
 const WorkloadProfileStates = {
     type: {
@@ -9593,10 +9892,10 @@ const WorkloadProfileStates = {
                 serializedName: "properties",
                 type: {
                     name: "Composite",
-                    className: "WorkloadProfileStatesProperties"
-                }
-            } })
-    }
+                    className: "WorkloadProfileStatesProperties",
+                },
+            } }),
+    },
 };
 const ManagedEnvironmentStorage = {
     type: {
@@ -9606,10 +9905,10 @@ const ManagedEnvironmentStorage = {
                 serializedName: "properties",
                 type: {
                     name: "Composite",
-                    className: "ManagedEnvironmentStorageProperties"
-                }
-            } })
-    }
+                    className: "ManagedEnvironmentStorageProperties",
+                },
+            } }),
+    },
 };
 const SourceControl = {
     type: {
@@ -9619,26 +9918,26 @@ const SourceControl = {
                 serializedName: "properties.operationState",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, repoUrl: {
                 serializedName: "properties.repoUrl",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, branch: {
                 serializedName: "properties.branch",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, githubActionConfiguration: {
                 serializedName: "properties.githubActionConfiguration",
                 type: {
                     name: "Composite",
-                    className: "GithubActionConfiguration"
-                }
-            } })
-    }
+                    className: "GithubActionConfiguration",
+                },
+            } }),
+    },
 };
 const ConnectedEnvironment = {
     type: {
@@ -9648,44 +9947,44 @@ const ConnectedEnvironment = {
                 serializedName: "extendedLocation",
                 type: {
                     name: "Composite",
-                    className: "ExtendedLocation"
-                }
+                    className: "ExtendedLocation",
+                },
             }, provisioningState: {
                 serializedName: "properties.provisioningState",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, deploymentErrors: {
                 serializedName: "properties.deploymentErrors",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, defaultDomain: {
                 serializedName: "properties.defaultDomain",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, staticIp: {
                 serializedName: "properties.staticIp",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, daprAIConnectionString: {
                 serializedName: "properties.daprAIConnectionString",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, customDomainConfiguration: {
                 serializedName: "properties.customDomainConfiguration",
                 type: {
                     name: "Composite",
-                    className: "CustomDomainConfiguration"
-                }
-            } })
-    }
+                    className: "CustomDomainConfiguration",
+                },
+            } }),
+    },
 };
 const Certificate = {
     type: {
@@ -9695,10 +9994,10 @@ const Certificate = {
                 serializedName: "properties",
                 type: {
                     name: "Composite",
-                    className: "CertificateProperties"
-                }
-            } })
-    }
+                    className: "CertificateProperties",
+                },
+            } }),
+    },
 };
 const ContainerApp = {
     type: {
@@ -9708,76 +10007,76 @@ const ContainerApp = {
                 serializedName: "extendedLocation",
                 type: {
                     name: "Composite",
-                    className: "ExtendedLocation"
-                }
+                    className: "ExtendedLocation",
+                },
             }, identity: {
                 serializedName: "identity",
                 type: {
                     name: "Composite",
-                    className: "ManagedServiceIdentity"
-                }
+                    className: "ManagedServiceIdentity",
+                },
             }, managedBy: {
                 serializedName: "managedBy",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, provisioningState: {
                 serializedName: "properties.provisioningState",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, managedEnvironmentId: {
                 serializedName: "properties.managedEnvironmentId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, environmentId: {
                 serializedName: "properties.environmentId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, workloadProfileName: {
                 serializedName: "properties.workloadProfileName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, latestRevisionName: {
                 serializedName: "properties.latestRevisionName",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, latestReadyRevisionName: {
                 serializedName: "properties.latestReadyRevisionName",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, latestRevisionFqdn: {
                 serializedName: "properties.latestRevisionFqdn",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, customDomainVerificationId: {
                 serializedName: "properties.customDomainVerificationId",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, configuration: {
                 serializedName: "properties.configuration",
                 type: {
                     name: "Composite",
-                    className: "Configuration"
-                }
+                    className: "Configuration",
+                },
             }, template: {
                 serializedName: "properties.template",
                 type: {
                     name: "Composite",
-                    className: "Template"
-                }
+                    className: "Template",
+                },
             }, outboundIpAddresses: {
                 serializedName: "properties.outboundIpAddresses",
                 readOnly: true,
@@ -9785,18 +10084,18 @@ const ContainerApp = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             }, eventStreamEndpoint: {
                 serializedName: "properties.eventStreamEndpoint",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            } })
-    }
+                    name: "String",
+                },
+            } }),
+    },
 };
 const ContainerAppAuthToken = {
     type: {
@@ -9806,16 +10105,16 @@ const ContainerAppAuthToken = {
                 serializedName: "properties.token",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, expires: {
                 serializedName: "properties.expires",
                 readOnly: true,
                 type: {
-                    name: "DateTime"
-                }
-            } })
-    }
+                    name: "DateTime",
+                },
+            } }),
+    },
 };
 const ManagedEnvironment = {
     type: {
@@ -9824,71 +10123,71 @@ const ManagedEnvironment = {
         modelProperties: Object.assign(Object.assign({}, TrackedResource.type.modelProperties), { kind: {
                 serializedName: "kind",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, provisioningState: {
                 serializedName: "properties.provisioningState",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, daprAIInstrumentationKey: {
                 serializedName: "properties.daprAIInstrumentationKey",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, daprAIConnectionString: {
                 serializedName: "properties.daprAIConnectionString",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, vnetConfiguration: {
                 serializedName: "properties.vnetConfiguration",
                 type: {
                     name: "Composite",
-                    className: "VnetConfiguration"
-                }
+                    className: "VnetConfiguration",
+                },
             }, deploymentErrors: {
                 serializedName: "properties.deploymentErrors",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, defaultDomain: {
                 serializedName: "properties.defaultDomain",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, staticIp: {
                 serializedName: "properties.staticIp",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, appLogsConfiguration: {
                 serializedName: "properties.appLogsConfiguration",
                 type: {
                     name: "Composite",
-                    className: "AppLogsConfiguration"
-                }
+                    className: "AppLogsConfiguration",
+                },
             }, zoneRedundant: {
                 serializedName: "properties.zoneRedundant",
                 type: {
-                    name: "Boolean"
-                }
+                    name: "Boolean",
+                },
             }, customDomainConfiguration: {
                 serializedName: "properties.customDomainConfiguration",
                 type: {
                     name: "Composite",
-                    className: "CustomDomainConfiguration"
-                }
+                    className: "CustomDomainConfiguration",
+                },
             }, eventStreamEndpoint: {
                 serializedName: "properties.eventStreamEndpoint",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, workloadProfiles: {
                 serializedName: "properties.workloadProfiles",
                 type: {
@@ -9896,35 +10195,41 @@ const ManagedEnvironment = {
                     element: {
                         type: {
                             name: "Composite",
-                            className: "WorkloadProfile"
-                        }
-                    }
-                }
+                            className: "WorkloadProfile",
+                        },
+                    },
+                },
             }, kedaConfiguration: {
                 serializedName: "properties.kedaConfiguration",
                 type: {
                     name: "Composite",
-                    className: "KedaConfiguration"
-                }
+                    className: "KedaConfiguration",
+                },
             }, daprConfiguration: {
                 serializedName: "properties.daprConfiguration",
                 type: {
                     name: "Composite",
-                    className: "DaprConfiguration"
-                }
+                    className: "DaprConfiguration",
+                },
             }, infrastructureResourceGroup: {
                 serializedName: "properties.infrastructureResourceGroup",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, peerAuthentication: {
                 serializedName: "properties.peerAuthentication",
                 type: {
                     name: "Composite",
-                    className: "ManagedEnvironmentPropertiesPeerAuthentication"
-                }
-            } })
-    }
+                    className: "ManagedEnvironmentPropertiesPeerAuthentication",
+                },
+            }, peerTrafficConfiguration: {
+                serializedName: "properties.peerTrafficConfiguration",
+                type: {
+                    name: "Composite",
+                    className: "ManagedEnvironmentPropertiesPeerTrafficConfiguration",
+                },
+            } }),
+    },
 };
 const Job = {
     type: {
@@ -9934,36 +10239,36 @@ const Job = {
                 serializedName: "identity",
                 type: {
                     name: "Composite",
-                    className: "ManagedServiceIdentity"
-                }
+                    className: "ManagedServiceIdentity",
+                },
             }, provisioningState: {
                 serializedName: "properties.provisioningState",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, environmentId: {
                 serializedName: "properties.environmentId",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, workloadProfileName: {
                 serializedName: "properties.workloadProfileName",
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, configuration: {
                 serializedName: "properties.configuration",
                 type: {
                     name: "Composite",
-                    className: "JobConfiguration"
-                }
+                    className: "JobConfiguration",
+                },
             }, template: {
                 serializedName: "properties.template",
                 type: {
                     name: "Composite",
-                    className: "JobTemplate"
-                }
+                    className: "JobTemplate",
+                },
             }, outboundIpAddresses: {
                 serializedName: "properties.outboundIpAddresses",
                 readOnly: true,
@@ -9971,18 +10276,18 @@ const Job = {
                     name: "Sequence",
                     element: {
                         type: {
-                            name: "String"
-                        }
-                    }
-                }
+                            name: "String",
+                        },
+                    },
+                },
             }, eventStreamEndpoint: {
                 serializedName: "properties.eventStreamEndpoint",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
-            } })
-    }
+                    name: "String",
+                },
+            } }),
+    },
 };
 const ManagedCertificate = {
     type: {
@@ -9992,10 +10297,10 @@ const ManagedCertificate = {
                 serializedName: "properties",
                 type: {
                     name: "Composite",
-                    className: "ManagedCertificateProperties"
-                }
-            } })
-    }
+                    className: "ManagedCertificateProperties",
+                },
+            } }),
+    },
 };
 const EnvironmentAuthToken = {
     type: {
@@ -10005,16 +10310,16 @@ const EnvironmentAuthToken = {
                 serializedName: "properties.token",
                 readOnly: true,
                 type: {
-                    name: "String"
-                }
+                    name: "String",
+                },
             }, expires: {
                 serializedName: "properties.expires",
                 readOnly: true,
                 type: {
-                    name: "DateTime"
-                }
-            } })
-    }
+                    name: "DateTime",
+                },
+            } }),
+    },
 };
 const ConnectedEnvironmentsDeleteHeaders = {
     type: {
@@ -10024,11 +10329,11 @@ const ConnectedEnvironmentsDeleteHeaders = {
             location: {
                 serializedName: "location",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ContainerAppsDeleteHeaders = {
     type: {
@@ -10038,11 +10343,11 @@ const ContainerAppsDeleteHeaders = {
             location: {
                 serializedName: "location",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ContainerAppsUpdateHeaders = {
     type: {
@@ -10052,11 +10357,11 @@ const ContainerAppsUpdateHeaders = {
             location: {
                 serializedName: "location",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ContainerAppsStartHeaders = {
     type: {
@@ -10066,11 +10371,11 @@ const ContainerAppsStartHeaders = {
             location: {
                 serializedName: "location",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const ContainerAppsStopHeaders = {
     type: {
@@ -10080,11 +10385,11 @@ const ContainerAppsStopHeaders = {
             location: {
                 serializedName: "location",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const JobsDeleteHeaders = {
     type: {
@@ -10094,11 +10399,11 @@ const JobsDeleteHeaders = {
             location: {
                 serializedName: "location",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const JobsUpdateHeaders = {
     type: {
@@ -10108,11 +10413,11 @@ const JobsUpdateHeaders = {
             location: {
                 serializedName: "location",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const JobsStartHeaders = {
     type: {
@@ -10122,11 +10427,11 @@ const JobsStartHeaders = {
             location: {
                 serializedName: "location",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const JobsStopExecutionHeaders = {
     type: {
@@ -10136,11 +10441,11 @@ const JobsStopExecutionHeaders = {
             location: {
                 serializedName: "location",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 const JobsStopMultipleExecutionsHeaders = {
     type: {
@@ -10150,203 +10455,212 @@ const JobsStopMultipleExecutionsHeaders = {
             location: {
                 serializedName: "location",
                 type: {
-                    name: "String"
-                }
-            }
-        }
-    }
+                    name: "String",
+                },
+            },
+        },
+    },
 };
 
 var Mappers = /*#__PURE__*/Object.freeze({
     __proto__: null,
-    AuthConfigCollection: AuthConfigCollection,
-    AuthPlatform: AuthPlatform,
-    GlobalValidation: GlobalValidation,
-    IdentityProviders: IdentityProviders,
-    AzureActiveDirectory: AzureActiveDirectory,
-    AzureActiveDirectoryRegistration: AzureActiveDirectoryRegistration,
-    AzureActiveDirectoryLogin: AzureActiveDirectoryLogin,
-    AzureActiveDirectoryValidation: AzureActiveDirectoryValidation,
-    JwtClaimChecks: JwtClaimChecks,
-    DefaultAuthorizationPolicy: DefaultAuthorizationPolicy,
-    AllowedPrincipals: AllowedPrincipals,
-    Facebook: Facebook,
-    AppRegistration: AppRegistration,
-    LoginScopes: LoginScopes,
-    GitHub: GitHub,
-    ClientRegistration: ClientRegistration,
-    Google: Google,
     AllowedAudiencesValidation: AllowedAudiencesValidation,
-    Twitter: Twitter,
-    TwitterRegistration: TwitterRegistration,
+    AllowedPrincipals: AllowedPrincipals,
+    AppLogsConfiguration: AppLogsConfiguration,
+    AppRegistration: AppRegistration,
     Apple: Apple,
     AppleRegistration: AppleRegistration,
+    AuthConfig: AuthConfig,
+    AuthConfigCollection: AuthConfigCollection,
+    AuthPlatform: AuthPlatform,
+    AvailableOperations: AvailableOperations,
+    AvailableWorkloadProfile: AvailableWorkloadProfile,
+    AvailableWorkloadProfileProperties: AvailableWorkloadProfileProperties,
+    AvailableWorkloadProfilesCollection: AvailableWorkloadProfilesCollection,
+    AzureActiveDirectory: AzureActiveDirectory,
+    AzureActiveDirectoryLogin: AzureActiveDirectoryLogin,
+    AzureActiveDirectoryRegistration: AzureActiveDirectoryRegistration,
+    AzureActiveDirectoryValidation: AzureActiveDirectoryValidation,
+    AzureCredentials: AzureCredentials,
+    AzureFileProperties: AzureFileProperties,
     AzureStaticWebApps: AzureStaticWebApps,
     AzureStaticWebAppsRegistration: AzureStaticWebAppsRegistration,
-    CustomOpenIdConnectProvider: CustomOpenIdConnectProvider,
-    OpenIdConnectRegistration: OpenIdConnectRegistration,
-    OpenIdConnectClientCredential: OpenIdConnectClientCredential,
-    OpenIdConnectConfig: OpenIdConnectConfig,
-    OpenIdConnectLogin: OpenIdConnectLogin,
-    Login: Login,
-    LoginRoutes: LoginRoutes,
-    CookieExpiration: CookieExpiration,
-    Nonce: Nonce,
-    HttpSettings: HttpSettings,
-    HttpSettingsRoutes: HttpSettingsRoutes,
-    ForwardProxy: ForwardProxy,
-    Resource: Resource,
-    SystemData: SystemData,
-    DefaultErrorResponse: DefaultErrorResponse,
-    DefaultErrorResponseError: DefaultErrorResponseError,
-    DefaultErrorResponseErrorDetailsItem: DefaultErrorResponseErrorDetailsItem,
-    AvailableWorkloadProfilesCollection: AvailableWorkloadProfilesCollection,
-    AvailableWorkloadProfileProperties: AvailableWorkloadProfileProperties,
-    ErrorResponse: ErrorResponse,
-    ErrorDetail: ErrorDetail,
-    ErrorAdditionalInfo: ErrorAdditionalInfo,
+    BaseContainer: BaseContainer,
+    BillingMeter: BillingMeter,
     BillingMeterCollection: BillingMeterCollection,
     BillingMeterProperties: BillingMeterProperties,
-    ConnectedEnvironmentCollection: ConnectedEnvironmentCollection,
-    ExtendedLocation: ExtendedLocation,
-    CustomDomainConfiguration: CustomDomainConfiguration,
+    BlobStorageTokenStore: BlobStorageTokenStore,
+    Certificate: Certificate,
+    CertificateCollection: CertificateCollection,
+    CertificatePatch: CertificatePatch,
+    CertificateProperties: CertificateProperties,
     CheckNameAvailabilityRequest: CheckNameAvailabilityRequest,
     CheckNameAvailabilityResponse: CheckNameAvailabilityResponse,
-    CertificateCollection: CertificateCollection,
-    CertificateProperties: CertificateProperties,
-    CertificatePatch: CertificatePatch,
-    DaprComponentsCollection: DaprComponentsCollection,
-    Secret: Secret,
-    DaprMetadata: DaprMetadata,
-    DaprSecretsCollection: DaprSecretsCollection,
-    DaprSecret: DaprSecret,
-    ConnectedEnvironmentStoragesCollection: ConnectedEnvironmentStoragesCollection,
-    ConnectedEnvironmentStorageProperties: ConnectedEnvironmentStorageProperties,
-    AzureFileProperties: AzureFileProperties,
-    ContainerAppCollection: ContainerAppCollection,
-    ManagedServiceIdentity: ManagedServiceIdentity,
-    UserAssignedIdentity: UserAssignedIdentity,
+    ClientRegistration: ClientRegistration,
     Configuration: Configuration,
-    Ingress: Ingress,
-    TrafficWeight: TrafficWeight,
-    CustomDomain: CustomDomain,
-    IpSecurityRestrictionRule: IpSecurityRestrictionRule,
-    IngressStickySessions: IngressStickySessions,
-    CorsPolicy: CorsPolicy,
-    RegistryCredentials: RegistryCredentials,
-    Dapr: Dapr,
-    Service: Service,
-    Template: Template,
-    BaseContainer: BaseContainer,
-    EnvironmentVar: EnvironmentVar,
-    ContainerResources: ContainerResources,
-    VolumeMount: VolumeMount,
+    ConnectedEnvironment: ConnectedEnvironment,
+    ConnectedEnvironmentCollection: ConnectedEnvironmentCollection,
+    ConnectedEnvironmentStorage: ConnectedEnvironmentStorage,
+    ConnectedEnvironmentStorageProperties: ConnectedEnvironmentStorageProperties,
+    ConnectedEnvironmentStoragesCollection: ConnectedEnvironmentStoragesCollection,
+    ConnectedEnvironmentsDeleteHeaders: ConnectedEnvironmentsDeleteHeaders,
+    Container: Container,
+    ContainerApp: ContainerApp,
+    ContainerAppAuthToken: ContainerAppAuthToken,
+    ContainerAppCollection: ContainerAppCollection,
+    ContainerAppJobExecutions: ContainerAppJobExecutions,
     ContainerAppProbe: ContainerAppProbe,
     ContainerAppProbeHttpGet: ContainerAppProbeHttpGet,
     ContainerAppProbeHttpGetHttpHeadersItem: ContainerAppProbeHttpGetHttpHeadersItem,
     ContainerAppProbeTcpSocket: ContainerAppProbeTcpSocket,
-    Scale: Scale,
-    ScaleRule: ScaleRule,
-    QueueScaleRule: QueueScaleRule,
-    ScaleRuleAuth: ScaleRuleAuth,
-    CustomScaleRule: CustomScaleRule,
-    HttpScaleRule: HttpScaleRule,
-    TcpScaleRule: TcpScaleRule,
-    Volume: Volume,
-    SecretVolumeItem: SecretVolumeItem,
-    ServiceBind: ServiceBind,
+    ContainerAppSecret: ContainerAppSecret,
+    ContainerAppsDeleteHeaders: ContainerAppsDeleteHeaders,
+    ContainerAppsStartHeaders: ContainerAppsStartHeaders,
+    ContainerAppsStopHeaders: ContainerAppsStopHeaders,
+    ContainerAppsUpdateHeaders: ContainerAppsUpdateHeaders,
+    ContainerResources: ContainerResources,
+    CookieExpiration: CookieExpiration,
+    CorsPolicy: CorsPolicy,
+    CustomDomain: CustomDomain,
+    CustomDomainConfiguration: CustomDomainConfiguration,
     CustomHostnameAnalysisResult: CustomHostnameAnalysisResult,
     CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo: CustomHostnameAnalysisResultCustomDomainVerificationFailureInfo,
     CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem: CustomHostnameAnalysisResultCustomDomainVerificationFailureInfoDetailsItem,
-    SecretsCollection: SecretsCollection,
-    ContainerAppSecret: ContainerAppSecret,
-    RevisionCollection: RevisionCollection,
-    ReplicaContainer: ReplicaContainer,
-    ReplicaCollection: ReplicaCollection,
-    DiagnosticsCollection: DiagnosticsCollection,
-    DiagnosticsProperties: DiagnosticsProperties,
-    DiagnosticsDefinition: DiagnosticsDefinition,
-    DiagnosticSupportTopic: DiagnosticSupportTopic,
-    DiagnosticsDataApiResponse: DiagnosticsDataApiResponse,
-    DiagnosticDataTableResponseObject: DiagnosticDataTableResponseObject,
-    DiagnosticDataTableResponseColumn: DiagnosticDataTableResponseColumn,
-    DiagnosticRendering: DiagnosticRendering,
-    DiagnosticsStatus: DiagnosticsStatus,
+    CustomOpenIdConnectProvider: CustomOpenIdConnectProvider,
+    CustomScaleRule: CustomScaleRule,
+    Dapr: Dapr,
+    DaprComponent: DaprComponent,
+    DaprComponentsCollection: DaprComponentsCollection,
+    DaprConfiguration: DaprConfiguration,
+    DaprMetadata: DaprMetadata,
+    DaprSecret: DaprSecret,
+    DaprSecretsCollection: DaprSecretsCollection,
+    DefaultAuthorizationPolicy: DefaultAuthorizationPolicy,
+    DefaultErrorResponse: DefaultErrorResponse,
+    DefaultErrorResponseError: DefaultErrorResponseError,
+    DefaultErrorResponseErrorDetailsItem: DefaultErrorResponseErrorDetailsItem,
     DiagnosticDataProviderMetadata: DiagnosticDataProviderMetadata,
     DiagnosticDataProviderMetadataPropertyBagItem: DiagnosticDataProviderMetadataPropertyBagItem,
-    VnetConfiguration: VnetConfiguration,
-    AppLogsConfiguration: AppLogsConfiguration,
-    LogAnalyticsConfiguration: LogAnalyticsConfiguration,
-    WorkloadProfile: WorkloadProfile,
-    KedaConfiguration: KedaConfiguration,
-    DaprConfiguration: DaprConfiguration,
-    ManagedEnvironmentPropertiesPeerAuthentication: ManagedEnvironmentPropertiesPeerAuthentication,
-    Mtls: Mtls,
-    AvailableOperations: AvailableOperations,
-    OperationDetail: OperationDetail,
-    OperationDisplay: OperationDisplay,
-    JobsCollection: JobsCollection,
+    DiagnosticDataTableResponseColumn: DiagnosticDataTableResponseColumn,
+    DiagnosticDataTableResponseObject: DiagnosticDataTableResponseObject,
+    DiagnosticRendering: DiagnosticRendering,
+    DiagnosticSupportTopic: DiagnosticSupportTopic,
+    Diagnostics: Diagnostics,
+    DiagnosticsCollection: DiagnosticsCollection,
+    DiagnosticsDataApiResponse: DiagnosticsDataApiResponse,
+    DiagnosticsDefinition: DiagnosticsDefinition,
+    DiagnosticsProperties: DiagnosticsProperties,
+    DiagnosticsStatus: DiagnosticsStatus,
+    EncryptionSettings: EncryptionSettings,
+    EnvironmentAuthToken: EnvironmentAuthToken,
+    EnvironmentVar: EnvironmentVar,
+    ErrorAdditionalInfo: ErrorAdditionalInfo,
+    ErrorDetail: ErrorDetail,
+    ErrorResponse: ErrorResponse,
+    ExtendedLocation: ExtendedLocation,
+    Facebook: Facebook,
+    ForwardProxy: ForwardProxy,
+    GitHub: GitHub,
+    GithubActionConfiguration: GithubActionConfiguration,
+    GlobalValidation: GlobalValidation,
+    Google: Google,
+    HttpScaleRule: HttpScaleRule,
+    HttpSettings: HttpSettings,
+    HttpSettingsRoutes: HttpSettingsRoutes,
+    IdentityProviders: IdentityProviders,
+    Ingress: Ingress,
+    IngressPortMapping: IngressPortMapping,
+    IngressStickySessions: IngressStickySessions,
+    InitContainer: InitContainer,
+    IpSecurityRestrictionRule: IpSecurityRestrictionRule,
+    Job: Job,
     JobConfiguration: JobConfiguration,
+    JobConfigurationEventTriggerConfig: JobConfigurationEventTriggerConfig,
     JobConfigurationManualTriggerConfig: JobConfigurationManualTriggerConfig,
     JobConfigurationScheduleTriggerConfig: JobConfigurationScheduleTriggerConfig,
-    JobConfigurationEventTriggerConfig: JobConfigurationEventTriggerConfig,
-    JobScale: JobScale,
-    JobScaleRule: JobScaleRule,
-    JobTemplate: JobTemplate,
+    JobExecution: JobExecution,
+    JobExecutionBase: JobExecutionBase,
+    JobExecutionContainer: JobExecutionContainer,
+    JobExecutionNamesCollection: JobExecutionNamesCollection,
+    JobExecutionTemplate: JobExecutionTemplate,
     JobPatchProperties: JobPatchProperties,
     JobPatchPropertiesProperties: JobPatchPropertiesProperties,
-    JobExecutionTemplate: JobExecutionTemplate,
-    JobExecutionContainer: JobExecutionContainer,
-    JobExecutionBase: JobExecutionBase,
-    ContainerAppJobExecutions: ContainerAppJobExecutions,
-    JobExecution: JobExecution,
+    JobScale: JobScale,
+    JobScaleRule: JobScaleRule,
     JobSecretsCollection: JobSecretsCollection,
-    ManagedEnvironmentsCollection: ManagedEnvironmentsCollection,
-    ManagedCertificateProperties: ManagedCertificateProperties,
-    ManagedCertificatePatch: ManagedCertificatePatch,
-    ManagedCertificateCollection: ManagedCertificateCollection,
-    WorkloadProfileStatesCollection: WorkloadProfileStatesCollection,
-    WorkloadProfileStatesProperties: WorkloadProfileStatesProperties,
-    ManagedEnvironmentStoragesCollection: ManagedEnvironmentStoragesCollection,
-    ManagedEnvironmentStorageProperties: ManagedEnvironmentStorageProperties,
-    SourceControlCollection: SourceControlCollection,
-    GithubActionConfiguration: GithubActionConfiguration,
-    RegistryInfo: RegistryInfo,
-    AzureCredentials: AzureCredentials,
-    JobExecutionNamesCollection: JobExecutionNamesCollection,
-    ProxyResource: ProxyResource,
-    TrackedResource: TrackedResource,
-    InitContainer: InitContainer,
-    Container: Container,
-    AuthConfig: AuthConfig,
-    AvailableWorkloadProfile: AvailableWorkloadProfile,
-    BillingMeter: BillingMeter,
-    DaprComponent: DaprComponent,
-    ConnectedEnvironmentStorage: ConnectedEnvironmentStorage,
-    Revision: Revision,
-    Replica: Replica,
-    Diagnostics: Diagnostics,
-    WorkloadProfileStates: WorkloadProfileStates,
-    ManagedEnvironmentStorage: ManagedEnvironmentStorage,
-    SourceControl: SourceControl,
-    ConnectedEnvironment: ConnectedEnvironment,
-    Certificate: Certificate,
-    ContainerApp: ContainerApp,
-    ContainerAppAuthToken: ContainerAppAuthToken,
-    ManagedEnvironment: ManagedEnvironment,
-    Job: Job,
-    ManagedCertificate: ManagedCertificate,
-    EnvironmentAuthToken: EnvironmentAuthToken,
-    ConnectedEnvironmentsDeleteHeaders: ConnectedEnvironmentsDeleteHeaders,
-    ContainerAppsDeleteHeaders: ContainerAppsDeleteHeaders,
-    ContainerAppsUpdateHeaders: ContainerAppsUpdateHeaders,
-    ContainerAppsStartHeaders: ContainerAppsStartHeaders,
-    ContainerAppsStopHeaders: ContainerAppsStopHeaders,
+    JobTemplate: JobTemplate,
+    JobsCollection: JobsCollection,
     JobsDeleteHeaders: JobsDeleteHeaders,
-    JobsUpdateHeaders: JobsUpdateHeaders,
     JobsStartHeaders: JobsStartHeaders,
     JobsStopExecutionHeaders: JobsStopExecutionHeaders,
-    JobsStopMultipleExecutionsHeaders: JobsStopMultipleExecutionsHeaders
+    JobsStopMultipleExecutionsHeaders: JobsStopMultipleExecutionsHeaders,
+    JobsUpdateHeaders: JobsUpdateHeaders,
+    JwtClaimChecks: JwtClaimChecks,
+    KedaConfiguration: KedaConfiguration,
+    ListUsagesResult: ListUsagesResult,
+    LogAnalyticsConfiguration: LogAnalyticsConfiguration,
+    Login: Login,
+    LoginRoutes: LoginRoutes,
+    LoginScopes: LoginScopes,
+    ManagedCertificate: ManagedCertificate,
+    ManagedCertificateCollection: ManagedCertificateCollection,
+    ManagedCertificatePatch: ManagedCertificatePatch,
+    ManagedCertificateProperties: ManagedCertificateProperties,
+    ManagedEnvironment: ManagedEnvironment,
+    ManagedEnvironmentPropertiesPeerAuthentication: ManagedEnvironmentPropertiesPeerAuthentication,
+    ManagedEnvironmentPropertiesPeerTrafficConfiguration: ManagedEnvironmentPropertiesPeerTrafficConfiguration,
+    ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption: ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption,
+    ManagedEnvironmentStorage: ManagedEnvironmentStorage,
+    ManagedEnvironmentStorageProperties: ManagedEnvironmentStorageProperties,
+    ManagedEnvironmentStoragesCollection: ManagedEnvironmentStoragesCollection,
+    ManagedEnvironmentsCollection: ManagedEnvironmentsCollection,
+    ManagedServiceIdentity: ManagedServiceIdentity,
+    Mtls: Mtls,
+    Nonce: Nonce,
+    OpenIdConnectClientCredential: OpenIdConnectClientCredential,
+    OpenIdConnectConfig: OpenIdConnectConfig,
+    OpenIdConnectLogin: OpenIdConnectLogin,
+    OpenIdConnectRegistration: OpenIdConnectRegistration,
+    OperationDetail: OperationDetail,
+    OperationDisplay: OperationDisplay,
+    ProxyResource: ProxyResource,
+    QueueScaleRule: QueueScaleRule,
+    RegistryCredentials: RegistryCredentials,
+    RegistryInfo: RegistryInfo,
+    Replica: Replica,
+    ReplicaCollection: ReplicaCollection,
+    ReplicaContainer: ReplicaContainer,
+    Resource: Resource,
+    Revision: Revision,
+    RevisionCollection: RevisionCollection,
+    Scale: Scale,
+    ScaleRule: ScaleRule,
+    ScaleRuleAuth: ScaleRuleAuth,
+    Secret: Secret,
+    SecretVolumeItem: SecretVolumeItem,
+    SecretsCollection: SecretsCollection,
+    Service: Service,
+    ServiceBind: ServiceBind,
+    SourceControl: SourceControl,
+    SourceControlCollection: SourceControlCollection,
+    SystemData: SystemData,
+    TcpScaleRule: TcpScaleRule,
+    Template: Template,
+    TokenStore: TokenStore,
+    TrackedResource: TrackedResource,
+    TrafficWeight: TrafficWeight,
+    Twitter: Twitter,
+    TwitterRegistration: TwitterRegistration,
+    Usage: Usage,
+    UsageName: UsageName,
+    UserAssignedIdentity: UserAssignedIdentity,
+    VnetConfiguration: VnetConfiguration,
+    Volume: Volume,
+    VolumeMount: VolumeMount,
+    WorkloadProfile: WorkloadProfile,
+    WorkloadProfileStates: WorkloadProfileStates,
+    WorkloadProfileStatesCollection: WorkloadProfileStatesCollection,
+    WorkloadProfileStatesProperties: WorkloadProfileStatesProperties
 });
 
 /*
@@ -10363,9 +10677,9 @@ const accept = {
         isConstant: true,
         serializedName: "Accept",
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const $host = {
     parameterPath: "$host",
@@ -10373,37 +10687,37 @@ const $host = {
         serializedName: "$host",
         required: true,
         type: {
-            name: "String"
-        }
+            name: "String",
+        },
     },
-    skipEncoding: true
+    skipEncoding: true,
 };
 const subscriptionId = {
     parameterPath: "subscriptionId",
     mapper: {
         constraints: {
-            MinLength: 1
+            MinLength: 1,
         },
         serializedName: "subscriptionId",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const resourceGroupName = {
     parameterPath: "resourceGroupName",
     mapper: {
         constraints: {
             MaxLength: 90,
-            MinLength: 1
+            MinLength: 1,
         },
         serializedName: "resourceGroupName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const containerAppName = {
     parameterPath: "containerAppName",
@@ -10411,20 +10725,20 @@ const containerAppName = {
         serializedName: "containerAppName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const apiVersion = {
     parameterPath: "apiVersion",
     mapper: {
-        defaultValue: "2023-05-01",
+        defaultValue: "2024-03-01",
         isConstant: true,
         serializedName: "api-version",
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const authConfigName = {
     parameterPath: "authConfigName",
@@ -10432,9 +10746,9 @@ const authConfigName = {
         serializedName: "authConfigName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const contentType = {
     parameterPath: ["options", "contentType"],
@@ -10443,13 +10757,13 @@ const contentType = {
         isConstant: true,
         serializedName: "Content-Type",
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const authConfigEnvelope = {
     parameterPath: "authConfigEnvelope",
-    mapper: AuthConfig
+    mapper: AuthConfig,
 };
 const nextLink = {
     parameterPath: "nextLink",
@@ -10457,23 +10771,23 @@ const nextLink = {
         serializedName: "nextLink",
         required: true,
         type: {
-            name: "String"
-        }
+            name: "String",
+        },
     },
-    skipEncoding: true
+    skipEncoding: true,
 };
 const location = {
     parameterPath: "location",
     mapper: {
         constraints: {
-            MinLength: 1
+            MinLength: 1,
         },
         serializedName: "location",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const connectedEnvironmentName = {
     parameterPath: "connectedEnvironmentName",
@@ -10481,17 +10795,17 @@ const connectedEnvironmentName = {
         serializedName: "connectedEnvironmentName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const environmentEnvelope = {
     parameterPath: "environmentEnvelope",
-    mapper: ConnectedEnvironment
+    mapper: ConnectedEnvironment,
 };
 const checkNameAvailabilityRequest = {
     parameterPath: "checkNameAvailabilityRequest",
-    mapper: CheckNameAvailabilityRequest
+    mapper: CheckNameAvailabilityRequest,
 };
 const certificateName = {
     parameterPath: "certificateName",
@@ -10499,17 +10813,17 @@ const certificateName = {
         serializedName: "certificateName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const certificateEnvelope = {
     parameterPath: ["options", "certificateEnvelope"],
-    mapper: Certificate
+    mapper: Certificate,
 };
 const certificateEnvelope1 = {
     parameterPath: "certificateEnvelope",
-    mapper: CertificatePatch
+    mapper: CertificatePatch,
 };
 const componentName = {
     parameterPath: "componentName",
@@ -10517,13 +10831,13 @@ const componentName = {
         serializedName: "componentName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const daprComponentEnvelope = {
     parameterPath: "daprComponentEnvelope",
-    mapper: DaprComponent
+    mapper: DaprComponent,
 };
 const storageName = {
     parameterPath: "storageName",
@@ -10531,48 +10845,48 @@ const storageName = {
         serializedName: "storageName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const storageEnvelope = {
     parameterPath: "storageEnvelope",
-    mapper: ConnectedEnvironmentStorage
+    mapper: ConnectedEnvironmentStorage,
 };
 const containerAppEnvelope = {
     parameterPath: "containerAppEnvelope",
-    mapper: ContainerApp
+    mapper: ContainerApp,
 };
 const customHostname = {
     parameterPath: ["options", "customHostname"],
     mapper: {
         serializedName: "customHostname",
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const containerAppName1 = {
     parameterPath: "containerAppName",
     mapper: {
         constraints: {
-            Pattern: new RegExp("^[-\\w\\._\\(\\)]+$")
+            Pattern: new RegExp("^[-\\w\\._\\(\\)]+$"),
         },
         serializedName: "containerAppName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const filter = {
     parameterPath: ["options", "filter"],
     mapper: {
         serializedName: "$filter",
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const revisionName = {
     parameterPath: "revisionName",
@@ -10580,9 +10894,9 @@ const revisionName = {
         serializedName: "revisionName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const replicaName = {
     parameterPath: "replicaName",
@@ -10590,9 +10904,9 @@ const replicaName = {
         serializedName: "replicaName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const detectorName = {
     parameterPath: "detectorName",
@@ -10600,9 +10914,9 @@ const detectorName = {
         serializedName: "detectorName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const environmentName = {
     parameterPath: "environmentName",
@@ -10610,51 +10924,77 @@ const environmentName = {
         serializedName: "environmentName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const jobName = {
     parameterPath: "jobName",
     mapper: {
         constraints: {
-            Pattern: new RegExp("^[-\\w\\._\\(\\)]+$")
+            Pattern: new RegExp("^[-\\w\\._\\(\\)]+$"),
         },
         serializedName: "jobName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
+};
+const detectorName1 = {
+    parameterPath: "detectorName",
+    mapper: {
+        constraints: {
+            Pattern: new RegExp("^[-\\w\\._\\(\\)]+$"),
+        },
+        serializedName: "detectorName",
+        required: true,
+        type: {
+            name: "String",
+        },
+    },
+};
+const apiName = {
+    parameterPath: "apiName",
+    mapper: {
+        constraints: {
+            Pattern: new RegExp("^[-\\w\\._]+$"),
+        },
+        serializedName: "apiName",
+        required: true,
+        type: {
+            name: "String",
+        },
+    },
 };
 const jobEnvelope = {
     parameterPath: "jobEnvelope",
-    mapper: Job
+    mapper: Job,
 };
 const jobEnvelope1 = {
     parameterPath: "jobEnvelope",
-    mapper: JobPatchProperties
+    mapper: JobPatchProperties,
 };
 const template = {
     parameterPath: ["options", "template"],
-    mapper: JobExecutionTemplate
+    mapper: JobExecutionTemplate,
 };
 const jobExecutionName = {
     parameterPath: "jobExecutionName",
     mapper: {
         constraints: {
-            Pattern: new RegExp("^[-\\w\\._\\(\\)]+$")
+            Pattern: new RegExp("^[-\\w\\._\\(\\)]+$"),
         },
         serializedName: "jobExecutionName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const environmentEnvelope1 = {
     parameterPath: "environmentEnvelope",
-    mapper: ManagedEnvironment
+    mapper: ManagedEnvironment,
 };
 const managedCertificateName = {
     parameterPath: "managedCertificateName",
@@ -10662,21 +11002,21 @@ const managedCertificateName = {
         serializedName: "managedCertificateName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const managedCertificateEnvelope = {
     parameterPath: ["options", "managedCertificateEnvelope"],
-    mapper: ManagedCertificate
+    mapper: ManagedCertificate,
 };
 const managedCertificateEnvelope1 = {
     parameterPath: "managedCertificateEnvelope",
-    mapper: ManagedCertificatePatch
+    mapper: ManagedCertificatePatch,
 };
 const storageEnvelope1 = {
     parameterPath: "storageEnvelope",
-    mapper: ManagedEnvironmentStorage
+    mapper: ManagedEnvironmentStorage,
 };
 const sourceControlName = {
     parameterPath: "sourceControlName",
@@ -10684,13 +11024,39 @@ const sourceControlName = {
         serializedName: "sourceControlName",
         required: true,
         type: {
-            name: "String"
-        }
-    }
+            name: "String",
+        },
+    },
 };
 const sourceControlEnvelope = {
     parameterPath: "sourceControlEnvelope",
-    mapper: SourceControl
+    mapper: SourceControl,
+};
+const location1 = {
+    parameterPath: "location",
+    mapper: {
+        constraints: {
+            Pattern: new RegExp("^[-\\w\\._]+$"),
+        },
+        serializedName: "location",
+        required: true,
+        type: {
+            name: "String",
+        },
+    },
+};
+const environmentName1 = {
+    parameterPath: "environmentName",
+    mapper: {
+        constraints: {
+            Pattern: new RegExp("^[-\\w\\._]+$"),
+        },
+        serializedName: "environmentName",
+        required: true,
+        type: {
+            name: "String",
+        },
+    },
 };
 
 /*
@@ -10730,7 +11096,7 @@ class ContainerAppsAuthConfigsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listByContainerAppPagingPage(resourceGroupName, containerAppName, options, settings);
-            }
+            },
         };
     }
     listByContainerAppPagingPage(resourceGroupName, containerAppName, options, settings) {
@@ -10757,16 +11123,11 @@ class ContainerAppsAuthConfigsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listByContainerAppPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listByContainerAppPagingPage(resourceGroupName, containerAppName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listByContainerAppPagingPage(resourceGroupName, containerAppName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -10811,7 +11172,7 @@ class ContainerAppsAuthConfigsImpl {
             containerAppName,
             authConfigName,
             authConfigEnvelope,
-            options
+            options,
         }, createOrUpdateOperationSpec$c);
     }
     /**
@@ -10836,38 +11197,17 @@ class ContainerAppsAuthConfigsImpl {
     }
 }
 // Operation Specifications
-const serializer$n = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const serializer$p = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
 const listByContainerAppOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/authConfigs",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: AuthConfigCollection
+            bodyMapper: AuthConfigCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    queryParameters: [apiVersion],
-    urlParameters: [
-        $host,
-        subscriptionId,
-        resourceGroupName,
-        containerAppName
-    ],
-    headerParameters: [accept],
-    serializer: serializer$n
-};
-const getOperationSpec$e = {
-    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/authConfigs/{authConfigName}",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: AuthConfig
+            bodyMapper: DefaultErrorResponse,
         },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -10875,21 +11215,42 @@ const getOperationSpec$e = {
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        authConfigName
     ],
     headerParameters: [accept],
-    serializer: serializer$n
+    serializer: serializer$p,
+};
+const getOperationSpec$e = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/authConfigs/{authConfigName}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: AuthConfig,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        containerAppName,
+        authConfigName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$p,
 };
 const createOrUpdateOperationSpec$c = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/authConfigs/{authConfigName}",
     httpMethod: "PUT",
     responses: {
         200: {
-            bodyMapper: AuthConfig
+            bodyMapper: AuthConfig,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: authConfigEnvelope,
     queryParameters: [apiVersion],
@@ -10898,11 +11259,11 @@ const createOrUpdateOperationSpec$c = {
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        authConfigName
+        authConfigName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$n
+    serializer: serializer$p,
 };
 const deleteOperationSpec$c = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/authConfigs/{authConfigName}",
@@ -10911,8 +11272,8 @@ const deleteOperationSpec$c = {
         200: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -10920,31 +11281,31 @@ const deleteOperationSpec$c = {
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        authConfigName
+        authConfigName,
     ],
     headerParameters: [accept],
-    serializer: serializer$n
+    serializer: serializer$p,
 };
 const listByContainerAppNextOperationSpec$1 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: AuthConfigCollection
+            bodyMapper: AuthConfigCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        nextLink
+        nextLink,
     ],
     headerParameters: [accept],
-    serializer: serializer$n
+    serializer: serializer$p,
 };
 
 /*
@@ -10983,7 +11344,7 @@ class AvailableWorkloadProfilesImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.getPagingPage(location, options, settings);
-            }
+            },
         };
     }
     getPagingPage(location, options, settings) {
@@ -11010,16 +11371,11 @@ class AvailableWorkloadProfilesImpl {
         return tslib.__asyncGenerator(this, arguments, function* getPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.getPagingPage(location, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.getPagingPage(location, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -11050,46 +11406,46 @@ class AvailableWorkloadProfilesImpl {
     }
 }
 // Operation Specifications
-const serializer$m = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const serializer$o = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
 const getOperationSpec$d = {
     path: "/subscriptions/{subscriptionId}/providers/Microsoft.App/locations/{location}/availableManagedEnvironmentsWorkloadProfileTypes",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: AvailableWorkloadProfilesCollection
+            bodyMapper: AvailableWorkloadProfilesCollection,
         },
         default: {
-            bodyMapper: ErrorResponse
-        }
+            bodyMapper: ErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
-        location
+        location,
     ],
     headerParameters: [accept],
-    serializer: serializer$m
+    serializer: serializer$o,
 };
 const getNextOperationSpec = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: AvailableWorkloadProfilesCollection
+            bodyMapper: AvailableWorkloadProfilesCollection,
         },
         default: {
-            bodyMapper: ErrorResponse
-        }
+            bodyMapper: ErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         nextLink,
-        location
+        location,
     ],
     headerParameters: [accept],
-    serializer: serializer$m
+    serializer: serializer$o,
 };
 
 /*
@@ -11118,26 +11474,26 @@ class BillingMetersImpl {
     }
 }
 // Operation Specifications
-const serializer$l = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const serializer$n = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
 const getOperationSpec$c = {
     path: "/subscriptions/{subscriptionId}/providers/Microsoft.App/locations/{location}/billingMeters",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: BillingMeterCollection
+            bodyMapper: BillingMeterCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
-        location
+        location,
     ],
     headerParameters: [accept],
-    serializer: serializer$l
+    serializer: serializer$n,
 };
 
 /*
@@ -11156,7 +11512,7 @@ function createLroSpec(inputs) {
         sendPollRequest: (path, options) => {
             const restSpec = tslib.__rest(spec, ["requestBody"]);
             return sendOperationFn(args, Object.assign(Object.assign({}, restSpec), { httpMethod: "GET", path, abortSignal: options === null || options === void 0 ? void 0 : options.abortSignal }));
-        }
+        },
     };
 }
 
@@ -11195,7 +11551,7 @@ class ConnectedEnvironmentsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listBySubscriptionPagingPage(options, settings);
-            }
+            },
         };
     }
     listBySubscriptionPagingPage(options, settings) {
@@ -11222,16 +11578,11 @@ class ConnectedEnvironmentsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listBySubscriptionPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listBySubscriptionPagingPage(options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listBySubscriptionPagingPage(options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -11262,7 +11613,7 @@ class ConnectedEnvironmentsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listByResourceGroupPagingPage(resourceGroupName, options, settings);
-            }
+            },
         };
     }
     listByResourceGroupPagingPage(resourceGroupName, options, settings) {
@@ -11289,16 +11640,11 @@ class ConnectedEnvironmentsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listByResourceGroupPagingAll_1() {
             var _a, e_2, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listByResourceGroupPagingPage(resourceGroupName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listByResourceGroupPagingPage(resourceGroupName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_2_1) { e_2 = { error: e_2_1 }; }
@@ -11361,8 +11707,8 @@ class ConnectedEnvironmentsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
@@ -11371,14 +11717,14 @@ class ConnectedEnvironmentsImpl {
                     resourceGroupName,
                     connectedEnvironmentName,
                     environmentEnvelope,
-                    options
+                    options,
                 },
-                spec: createOrUpdateOperationSpec$b
+                spec: createOrUpdateOperationSpec$b,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
                 intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
-                resourceLocationConfig: "azure-async-operation"
+                resourceLocationConfig: "azure-async-operation",
             });
             yield poller.poll();
             return poller;
@@ -11423,19 +11769,19 @@ class ConnectedEnvironmentsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
                 sendOperationFn,
                 args: { resourceGroupName, connectedEnvironmentName, options },
-                spec: deleteOperationSpec$b
+                spec: deleteOperationSpec$b,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
                 intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
-                resourceLocationConfig: "location"
+                resourceLocationConfig: "location",
             });
             yield poller.poll();
             return poller;
@@ -11474,7 +11820,7 @@ class ConnectedEnvironmentsImpl {
             resourceGroupName,
             connectedEnvironmentName,
             checkNameAvailabilityRequest,
-            options
+            options,
         }, checkNameAvailabilityOperationSpec$1);
     }
     /**
@@ -11496,83 +11842,83 @@ class ConnectedEnvironmentsImpl {
     }
 }
 // Operation Specifications
-const serializer$k = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const serializer$m = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
 const listBySubscriptionOperationSpec$3 = {
     path: "/subscriptions/{subscriptionId}/providers/Microsoft.App/connectedEnvironments",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ConnectedEnvironmentCollection
+            bodyMapper: ConnectedEnvironmentCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [$host, subscriptionId],
     headerParameters: [accept],
-    serializer: serializer$k
+    serializer: serializer$m,
 };
 const listByResourceGroupOperationSpec$3 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ConnectedEnvironmentCollection
+            bodyMapper: ConnectedEnvironmentCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    queryParameters: [apiVersion],
-    urlParameters: [
-        $host,
-        subscriptionId,
-        resourceGroupName
-    ],
-    headerParameters: [accept],
-    serializer: serializer$k
-};
-const getOperationSpec$b = {
-    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: ConnectedEnvironment
+            bodyMapper: DefaultErrorResponse,
         },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        connectedEnvironmentName
     ],
     headerParameters: [accept],
-    serializer: serializer$k
+    serializer: serializer$m,
+};
+const getOperationSpec$b = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: ConnectedEnvironment,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        connectedEnvironmentName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$m,
 };
 const createOrUpdateOperationSpec$b = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}",
     httpMethod: "PUT",
     responses: {
         200: {
-            bodyMapper: ConnectedEnvironment
+            bodyMapper: ConnectedEnvironment,
         },
         201: {
-            bodyMapper: ConnectedEnvironment
+            bodyMapper: ConnectedEnvironment,
         },
         202: {
-            bodyMapper: ConnectedEnvironment
+            bodyMapper: ConnectedEnvironment,
         },
         204: {
-            bodyMapper: ConnectedEnvironment
+            bodyMapper: ConnectedEnvironment,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: environmentEnvelope,
     queryParameters: [apiVersion],
@@ -11580,11 +11926,11 @@ const createOrUpdateOperationSpec$b = {
         $host,
         subscriptionId,
         resourceGroupName,
-        connectedEnvironmentName
+        connectedEnvironmentName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$k
+    serializer: serializer$m,
 };
 const deleteOperationSpec$b = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}",
@@ -11595,50 +11941,50 @@ const deleteOperationSpec$b = {
         202: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        connectedEnvironmentName
+        connectedEnvironmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$k
+    serializer: serializer$m,
 };
 const updateOperationSpec$6 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}",
     httpMethod: "PATCH",
     responses: {
         200: {
-            bodyMapper: ConnectedEnvironment
+            bodyMapper: ConnectedEnvironment,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        connectedEnvironmentName
+        connectedEnvironmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$k
+    serializer: serializer$m,
 };
 const checkNameAvailabilityOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/checkNameAvailability",
     httpMethod: "POST",
     responses: {
         200: {
-            bodyMapper: CheckNameAvailabilityResponse
+            bodyMapper: CheckNameAvailabilityResponse,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: checkNameAvailabilityRequest,
     queryParameters: [apiVersion],
@@ -11646,50 +11992,50 @@ const checkNameAvailabilityOperationSpec$1 = {
         $host,
         subscriptionId,
         resourceGroupName,
-        connectedEnvironmentName
+        connectedEnvironmentName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$k
+    serializer: serializer$m,
 };
 const listBySubscriptionNextOperationSpec$3 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ConnectedEnvironmentCollection
+            bodyMapper: ConnectedEnvironmentCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
-        nextLink
+        nextLink,
     ],
     headerParameters: [accept],
-    serializer: serializer$k
+    serializer: serializer$m,
 };
 const listByResourceGroupNextOperationSpec$3 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ConnectedEnvironmentCollection
+            bodyMapper: ConnectedEnvironmentCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        nextLink
+        nextLink,
     ],
     headerParameters: [accept],
-    serializer: serializer$k
+    serializer: serializer$m,
 };
 
 /*
@@ -11729,7 +12075,7 @@ class ConnectedEnvironmentsCertificatesImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listPagingPage(resourceGroupName, connectedEnvironmentName, options, settings);
-            }
+            },
         };
     }
     listPagingPage(resourceGroupName, connectedEnvironmentName, options, settings) {
@@ -11756,16 +12102,11 @@ class ConnectedEnvironmentsCertificatesImpl {
         return tslib.__asyncGenerator(this, arguments, function* listPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(resourceGroupName, connectedEnvironmentName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(resourceGroupName, connectedEnvironmentName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -11784,7 +12125,7 @@ class ConnectedEnvironmentsCertificatesImpl {
      * @param options The options parameters.
      */
     _list(resourceGroupName, connectedEnvironmentName, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, connectedEnvironmentName, options }, listOperationSpec$8);
+        return this.client.sendOperationRequest({ resourceGroupName, connectedEnvironmentName, options }, listOperationSpec$a);
     }
     /**
      * Get the specified Certificate.
@@ -11830,7 +12171,7 @@ class ConnectedEnvironmentsCertificatesImpl {
             connectedEnvironmentName,
             certificateName,
             certificateEnvelope,
-            options
+            options,
         }, updateOperationSpec$5);
     }
     /**
@@ -11841,42 +12182,21 @@ class ConnectedEnvironmentsCertificatesImpl {
      * @param options The options parameters.
      */
     _listNext(resourceGroupName, connectedEnvironmentName, nextLink, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, connectedEnvironmentName, nextLink, options }, listNextOperationSpec$6);
+        return this.client.sendOperationRequest({ resourceGroupName, connectedEnvironmentName, nextLink, options }, listNextOperationSpec$8);
     }
 }
 // Operation Specifications
-const serializer$j = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
-const listOperationSpec$8 = {
+const serializer$l = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const listOperationSpec$a = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/certificates",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: CertificateCollection
+            bodyMapper: CertificateCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    queryParameters: [apiVersion],
-    urlParameters: [
-        $host,
-        subscriptionId,
-        resourceGroupName,
-        connectedEnvironmentName
-    ],
-    headerParameters: [accept],
-    serializer: serializer$j
-};
-const getOperationSpec$a = {
-    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/certificates/{certificateName}",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: Certificate
+            bodyMapper: DefaultErrorResponse,
         },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -11884,21 +12204,42 @@ const getOperationSpec$a = {
         subscriptionId,
         resourceGroupName,
         connectedEnvironmentName,
-        certificateName
     ],
     headerParameters: [accept],
-    serializer: serializer$j
+    serializer: serializer$l,
+};
+const getOperationSpec$a = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/certificates/{certificateName}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: Certificate,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        connectedEnvironmentName,
+        certificateName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$l,
 };
 const createOrUpdateOperationSpec$a = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/certificates/{certificateName}",
     httpMethod: "PUT",
     responses: {
         200: {
-            bodyMapper: Certificate
+            bodyMapper: Certificate,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: certificateEnvelope,
     queryParameters: [apiVersion],
@@ -11907,11 +12248,11 @@ const createOrUpdateOperationSpec$a = {
         subscriptionId,
         resourceGroupName,
         connectedEnvironmentName,
-        certificateName
+        certificateName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$j
+    serializer: serializer$l,
 };
 const deleteOperationSpec$a = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/certificates/{certificateName}",
@@ -11920,8 +12261,8 @@ const deleteOperationSpec$a = {
         200: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -11929,21 +12270,21 @@ const deleteOperationSpec$a = {
         subscriptionId,
         resourceGroupName,
         connectedEnvironmentName,
-        certificateName
+        certificateName,
     ],
     headerParameters: [accept],
-    serializer: serializer$j
+    serializer: serializer$l,
 };
 const updateOperationSpec$5 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/certificates/{certificateName}",
     httpMethod: "PATCH",
     responses: {
         200: {
-            bodyMapper: Certificate
+            bodyMapper: Certificate,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: certificateEnvelope1,
     queryParameters: [apiVersion],
@@ -11952,32 +12293,32 @@ const updateOperationSpec$5 = {
         subscriptionId,
         resourceGroupName,
         connectedEnvironmentName,
-        certificateName
+        certificateName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$j
+    serializer: serializer$l,
 };
-const listNextOperationSpec$6 = {
+const listNextOperationSpec$8 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: CertificateCollection
+            bodyMapper: CertificateCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
         nextLink,
-        connectedEnvironmentName
+        connectedEnvironmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$j
+    serializer: serializer$l,
 };
 
 /*
@@ -12017,7 +12358,7 @@ class ConnectedEnvironmentsDaprComponentsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listPagingPage(resourceGroupName, connectedEnvironmentName, options, settings);
-            }
+            },
         };
     }
     listPagingPage(resourceGroupName, connectedEnvironmentName, options, settings) {
@@ -12044,16 +12385,11 @@ class ConnectedEnvironmentsDaprComponentsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(resourceGroupName, connectedEnvironmentName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(resourceGroupName, connectedEnvironmentName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -12072,7 +12408,7 @@ class ConnectedEnvironmentsDaprComponentsImpl {
      * @param options The options parameters.
      */
     _list(resourceGroupName, connectedEnvironmentName, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, connectedEnvironmentName, options }, listOperationSpec$7);
+        return this.client.sendOperationRequest({ resourceGroupName, connectedEnvironmentName, options }, listOperationSpec$9);
     }
     /**
      * Get a dapr component.
@@ -12098,7 +12434,7 @@ class ConnectedEnvironmentsDaprComponentsImpl {
             connectedEnvironmentName,
             componentName,
             daprComponentEnvelope,
-            options
+            options,
         }, createOrUpdateOperationSpec$9);
     }
     /**
@@ -12129,42 +12465,21 @@ class ConnectedEnvironmentsDaprComponentsImpl {
      * @param options The options parameters.
      */
     _listNext(resourceGroupName, connectedEnvironmentName, nextLink, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, connectedEnvironmentName, nextLink, options }, listNextOperationSpec$5);
+        return this.client.sendOperationRequest({ resourceGroupName, connectedEnvironmentName, nextLink, options }, listNextOperationSpec$7);
     }
 }
 // Operation Specifications
-const serializer$i = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
-const listOperationSpec$7 = {
+const serializer$k = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const listOperationSpec$9 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/daprComponents",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: DaprComponentsCollection
+            bodyMapper: DaprComponentsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    queryParameters: [apiVersion],
-    urlParameters: [
-        $host,
-        subscriptionId,
-        resourceGroupName,
-        connectedEnvironmentName
-    ],
-    headerParameters: [accept],
-    serializer: serializer$i
-};
-const getOperationSpec$9 = {
-    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/daprComponents/{componentName}",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: DaprComponent
+            bodyMapper: DefaultErrorResponse,
         },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -12172,21 +12487,42 @@ const getOperationSpec$9 = {
         subscriptionId,
         resourceGroupName,
         connectedEnvironmentName,
-        componentName
     ],
     headerParameters: [accept],
-    serializer: serializer$i
+    serializer: serializer$k,
+};
+const getOperationSpec$9 = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/daprComponents/{componentName}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: DaprComponent,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        connectedEnvironmentName,
+        componentName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$k,
 };
 const createOrUpdateOperationSpec$9 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/daprComponents/{componentName}",
     httpMethod: "PUT",
     responses: {
         200: {
-            bodyMapper: DaprComponent
+            bodyMapper: DaprComponent,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: daprComponentEnvelope,
     queryParameters: [apiVersion],
@@ -12195,11 +12531,11 @@ const createOrUpdateOperationSpec$9 = {
         subscriptionId,
         resourceGroupName,
         connectedEnvironmentName,
-        componentName
+        componentName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$i
+    serializer: serializer$k,
 };
 const deleteOperationSpec$9 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/daprComponents/{componentName}",
@@ -12208,8 +12544,8 @@ const deleteOperationSpec$9 = {
         200: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -12217,21 +12553,21 @@ const deleteOperationSpec$9 = {
         subscriptionId,
         resourceGroupName,
         connectedEnvironmentName,
-        componentName
+        componentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$i
+    serializer: serializer$k,
 };
 const listSecretsOperationSpec$3 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/daprComponents/{componentName}/listSecrets",
     httpMethod: "POST",
     responses: {
         200: {
-            bodyMapper: DaprSecretsCollection
+            bodyMapper: DaprSecretsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -12239,31 +12575,31 @@ const listSecretsOperationSpec$3 = {
         subscriptionId,
         resourceGroupName,
         connectedEnvironmentName,
-        componentName
+        componentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$i
+    serializer: serializer$k,
 };
-const listNextOperationSpec$5 = {
+const listNextOperationSpec$7 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: DaprComponentsCollection
+            bodyMapper: DaprComponentsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
         nextLink,
-        connectedEnvironmentName
+        connectedEnvironmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$i
+    serializer: serializer$k,
 };
 
 /*
@@ -12289,7 +12625,7 @@ class ConnectedEnvironmentsStoragesImpl {
      * @param options The options parameters.
      */
     list(resourceGroupName, connectedEnvironmentName, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, connectedEnvironmentName, options }, listOperationSpec$6);
+        return this.client.sendOperationRequest({ resourceGroupName, connectedEnvironmentName, options }, listOperationSpec$8);
     }
     /**
      * Get storage for a connectedEnvironment.
@@ -12315,7 +12651,7 @@ class ConnectedEnvironmentsStoragesImpl {
             connectedEnvironmentName,
             storageName,
             storageEnvelope,
-            options
+            options,
         }, createOrUpdateOperationSpec$8);
     }
     /**
@@ -12330,38 +12666,17 @@ class ConnectedEnvironmentsStoragesImpl {
     }
 }
 // Operation Specifications
-const serializer$h = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
-const listOperationSpec$6 = {
+const serializer$j = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const listOperationSpec$8 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/storages",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ConnectedEnvironmentStoragesCollection
+            bodyMapper: ConnectedEnvironmentStoragesCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    queryParameters: [apiVersion],
-    urlParameters: [
-        $host,
-        subscriptionId,
-        resourceGroupName,
-        connectedEnvironmentName
-    ],
-    headerParameters: [accept],
-    serializer: serializer$h
-};
-const getOperationSpec$8 = {
-    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/storages/{storageName}",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: ConnectedEnvironmentStorage
+            bodyMapper: DefaultErrorResponse,
         },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -12369,21 +12684,42 @@ const getOperationSpec$8 = {
         subscriptionId,
         resourceGroupName,
         connectedEnvironmentName,
-        storageName
     ],
     headerParameters: [accept],
-    serializer: serializer$h
+    serializer: serializer$j,
+};
+const getOperationSpec$8 = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/storages/{storageName}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: ConnectedEnvironmentStorage,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        connectedEnvironmentName,
+        storageName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$j,
 };
 const createOrUpdateOperationSpec$8 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/storages/{storageName}",
     httpMethod: "PUT",
     responses: {
         200: {
-            bodyMapper: ConnectedEnvironmentStorage
+            bodyMapper: ConnectedEnvironmentStorage,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: storageEnvelope,
     queryParameters: [apiVersion],
@@ -12392,11 +12728,11 @@ const createOrUpdateOperationSpec$8 = {
         subscriptionId,
         resourceGroupName,
         connectedEnvironmentName,
-        storageName
+        storageName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$h
+    serializer: serializer$j,
 };
 const deleteOperationSpec$8 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/connectedEnvironments/{connectedEnvironmentName}/storages/{storageName}",
@@ -12405,8 +12741,8 @@ const deleteOperationSpec$8 = {
         200: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -12414,10 +12750,10 @@ const deleteOperationSpec$8 = {
         subscriptionId,
         resourceGroupName,
         connectedEnvironmentName,
-        storageName
+        storageName,
     ],
     headerParameters: [accept],
-    serializer: serializer$h
+    serializer: serializer$j,
 };
 
 /*
@@ -12455,7 +12791,7 @@ class ContainerAppsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listBySubscriptionPagingPage(options, settings);
-            }
+            },
         };
     }
     listBySubscriptionPagingPage(options, settings) {
@@ -12482,16 +12818,11 @@ class ContainerAppsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listBySubscriptionPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listBySubscriptionPagingPage(options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listBySubscriptionPagingPage(options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -12522,7 +12853,7 @@ class ContainerAppsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listByResourceGroupPagingPage(resourceGroupName, options, settings);
-            }
+            },
         };
     }
     listByResourceGroupPagingPage(resourceGroupName, options, settings) {
@@ -12549,16 +12880,11 @@ class ContainerAppsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listByResourceGroupPagingAll_1() {
             var _a, e_2, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listByResourceGroupPagingPage(resourceGroupName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listByResourceGroupPagingPage(resourceGroupName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_2_1) { e_2 = { error: e_2_1 }; }
@@ -12621,8 +12947,8 @@ class ContainerAppsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
@@ -12631,14 +12957,14 @@ class ContainerAppsImpl {
                     resourceGroupName,
                     containerAppName,
                     containerAppEnvelope,
-                    options
+                    options,
                 },
-                spec: createOrUpdateOperationSpec$7
+                spec: createOrUpdateOperationSpec$7,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
                 intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
-                resourceLocationConfig: "azure-async-operation"
+                resourceLocationConfig: "azure-async-operation",
             });
             yield poller.poll();
             return poller;
@@ -12683,19 +13009,19 @@ class ContainerAppsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
                 sendOperationFn,
                 args: { resourceGroupName, containerAppName, options },
-                spec: deleteOperationSpec$7
+                spec: deleteOperationSpec$7,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
                 intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
-                resourceLocationConfig: "location"
+                resourceLocationConfig: "location",
             });
             yield poller.poll();
             return poller;
@@ -12740,8 +13066,8 @@ class ContainerAppsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
@@ -12750,13 +13076,13 @@ class ContainerAppsImpl {
                     resourceGroupName,
                     containerAppName,
                     containerAppEnvelope,
-                    options
+                    options,
                 },
-                spec: updateOperationSpec$4
+                spec: updateOperationSpec$4,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
-                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs
+                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
             });
             yield poller.poll();
             return poller;
@@ -12828,19 +13154,19 @@ class ContainerAppsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
                 sendOperationFn,
                 args: { resourceGroupName, containerAppName, options },
-                spec: startOperationSpec$1
+                spec: startOperationSpec$1,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
                 intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
-                resourceLocationConfig: "location"
+                resourceLocationConfig: "location",
             });
             yield poller.poll();
             return poller;
@@ -12884,19 +13210,19 @@ class ContainerAppsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
                 sendOperationFn,
                 args: { resourceGroupName, containerAppName, options },
-                spec: stopOperationSpec
+                spec: stopOperationSpec,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
                 intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
-                resourceLocationConfig: "location"
+                resourceLocationConfig: "location",
             });
             yield poller.poll();
             return poller;
@@ -12933,86 +13259,86 @@ class ContainerAppsImpl {
     }
 }
 // Operation Specifications
-const serializer$g = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const serializer$i = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
 const listBySubscriptionOperationSpec$2 = {
     path: "/subscriptions/{subscriptionId}/providers/Microsoft.App/containerApps",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ContainerAppCollection
+            bodyMapper: ContainerAppCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [$host, subscriptionId],
     headerParameters: [accept],
-    serializer: serializer$g
+    serializer: serializer$i,
 };
 const listByResourceGroupOperationSpec$2 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ContainerAppCollection
+            bodyMapper: ContainerAppCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    queryParameters: [apiVersion],
-    urlParameters: [
-        $host,
-        subscriptionId,
-        resourceGroupName
-    ],
-    headerParameters: [accept],
-    serializer: serializer$g
-};
-const getOperationSpec$7 = {
-    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: ContainerApp
+            bodyMapper: DefaultErrorResponse,
         },
-        404: {
-            isError: true
-        },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        containerAppName
     ],
     headerParameters: [accept],
-    serializer: serializer$g
+    serializer: serializer$i,
+};
+const getOperationSpec$7 = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: ContainerApp,
+        },
+        404: {
+            isError: true,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        containerAppName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$i,
 };
 const createOrUpdateOperationSpec$7 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}",
     httpMethod: "PUT",
     responses: {
         200: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         201: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         202: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         204: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: containerAppEnvelope,
     queryParameters: [apiVersion],
@@ -13020,11 +13346,11 @@ const createOrUpdateOperationSpec$7 = {
         $host,
         subscriptionId,
         resourceGroupName,
-        containerAppName
+        containerAppName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$g
+    serializer: serializer$i,
 };
 const deleteOperationSpec$7 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}",
@@ -13035,38 +13361,38 @@ const deleteOperationSpec$7 = {
         202: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        containerAppName
+        containerAppName,
     ],
     headerParameters: [accept],
-    serializer: serializer$g
+    serializer: serializer$i,
 };
 const updateOperationSpec$4 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}",
     httpMethod: "PATCH",
     responses: {
         200: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         201: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         202: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         204: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: containerAppEnvelope,
     queryParameters: [apiVersion],
@@ -13074,176 +13400,176 @@ const updateOperationSpec$4 = {
         $host,
         subscriptionId,
         resourceGroupName,
-        containerAppName
+        containerAppName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$g
+    serializer: serializer$i,
 };
 const listCustomHostNameAnalysisOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/listCustomHostNameAnalysis",
     httpMethod: "POST",
     responses: {
         200: {
-            bodyMapper: CustomHostnameAnalysisResult
+            bodyMapper: CustomHostnameAnalysisResult,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion, customHostname],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        containerAppName
+        containerAppName,
     ],
     headerParameters: [accept],
-    serializer: serializer$g
+    serializer: serializer$i,
 };
 const listSecretsOperationSpec$2 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/listSecrets",
     httpMethod: "POST",
     responses: {
         200: {
-            bodyMapper: SecretsCollection
+            bodyMapper: SecretsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        containerAppName
+        containerAppName,
     ],
     headerParameters: [accept],
-    serializer: serializer$g
+    serializer: serializer$i,
 };
 const getAuthTokenOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/getAuthtoken",
     httpMethod: "POST",
     responses: {
         200: {
-            bodyMapper: ContainerAppAuthToken
+            bodyMapper: ContainerAppAuthToken,
         },
         404: {
-            isError: true
+            isError: true,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        containerAppName
+        containerAppName,
     ],
     headerParameters: [accept],
-    serializer: serializer$g
+    serializer: serializer$i,
 };
 const startOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/start",
     httpMethod: "POST",
     responses: {
         200: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         201: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         202: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         204: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        containerAppName1
+        containerAppName1,
     ],
     headerParameters: [accept],
-    serializer: serializer$g
+    serializer: serializer$i,
 };
 const stopOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/stop",
     httpMethod: "POST",
     responses: {
         200: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         201: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         202: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         204: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        containerAppName1
+        containerAppName1,
     ],
     headerParameters: [accept],
-    serializer: serializer$g
+    serializer: serializer$i,
 };
 const listBySubscriptionNextOperationSpec$2 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ContainerAppCollection
+            bodyMapper: ContainerAppCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
-        nextLink
+        nextLink,
     ],
     headerParameters: [accept],
-    serializer: serializer$g
+    serializer: serializer$i,
 };
 const listByResourceGroupNextOperationSpec$2 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ContainerAppCollection
+            bodyMapper: ContainerAppCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        nextLink
+        nextLink,
     ],
     headerParameters: [accept],
-    serializer: serializer$g
+    serializer: serializer$i,
 };
 
 /*
@@ -13283,7 +13609,7 @@ class ContainerAppsRevisionsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listRevisionsPagingPage(resourceGroupName, containerAppName, options, settings);
-            }
+            },
         };
     }
     listRevisionsPagingPage(resourceGroupName, containerAppName, options, settings) {
@@ -13310,16 +13636,11 @@ class ContainerAppsRevisionsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listRevisionsPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listRevisionsPagingPage(resourceGroupName, containerAppName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listRevisionsPagingPage(resourceGroupName, containerAppName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -13392,38 +13713,38 @@ class ContainerAppsRevisionsImpl {
     }
 }
 // Operation Specifications
-const serializer$f = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const serializer$h = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
 const listRevisionsOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/revisions",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: RevisionCollection
+            bodyMapper: RevisionCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion, filter],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        containerAppName
+        containerAppName,
     ],
     headerParameters: [accept],
-    serializer: serializer$f
+    serializer: serializer$h,
 };
 const getRevisionOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/revisions/{revisionName}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: Revision
+            bodyMapper: Revision,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -13431,10 +13752,10 @@ const getRevisionOperationSpec$1 = {
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        revisionName
+        revisionName,
     ],
     headerParameters: [accept],
-    serializer: serializer$f
+    serializer: serializer$h,
 };
 const activateRevisionOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/revisions/{revisionName}/activate",
@@ -13442,8 +13763,8 @@ const activateRevisionOperationSpec = {
     responses: {
         200: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -13451,10 +13772,10 @@ const activateRevisionOperationSpec = {
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        revisionName
+        revisionName,
     ],
     headerParameters: [accept],
-    serializer: serializer$f
+    serializer: serializer$h,
 };
 const deactivateRevisionOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/revisions/{revisionName}/deactivate",
@@ -13462,8 +13783,8 @@ const deactivateRevisionOperationSpec = {
     responses: {
         200: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -13471,10 +13792,10 @@ const deactivateRevisionOperationSpec = {
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        revisionName
+        revisionName,
     ],
     headerParameters: [accept],
-    serializer: serializer$f
+    serializer: serializer$h,
 };
 const restartRevisionOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/revisions/{revisionName}/restart",
@@ -13482,8 +13803,8 @@ const restartRevisionOperationSpec = {
     responses: {
         200: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -13491,31 +13812,31 @@ const restartRevisionOperationSpec = {
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        revisionName
+        revisionName,
     ],
     headerParameters: [accept],
-    serializer: serializer$f
+    serializer: serializer$h,
 };
 const listRevisionsNextOperationSpec$1 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: RevisionCollection
+            bodyMapper: RevisionCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        nextLink
+        nextLink,
     ],
     headerParameters: [accept],
-    serializer: serializer$f
+    serializer: serializer$h,
 };
 
 /*
@@ -13548,7 +13869,7 @@ class ContainerAppsRevisionReplicasImpl {
             containerAppName,
             revisionName,
             replicaName,
-            options
+            options,
         }, getReplicaOperationSpec);
     }
     /**
@@ -13563,17 +13884,17 @@ class ContainerAppsRevisionReplicasImpl {
     }
 }
 // Operation Specifications
-const serializer$e = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const serializer$g = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
 const getReplicaOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/revisions/{revisionName}/replicas/{replicaName}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: Replica
+            bodyMapper: Replica,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -13582,21 +13903,21 @@ const getReplicaOperationSpec = {
         resourceGroupName,
         containerAppName,
         revisionName,
-        replicaName
+        replicaName,
     ],
     headerParameters: [accept],
-    serializer: serializer$e
+    serializer: serializer$g,
 };
 const listReplicasOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/revisions/{revisionName}/replicas",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ReplicaCollection
+            bodyMapper: ReplicaCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -13604,10 +13925,10 @@ const listReplicasOperationSpec = {
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        revisionName
+        revisionName,
     ],
     headerParameters: [accept],
-    serializer: serializer$e
+    serializer: serializer$g,
 };
 
 /*
@@ -13647,7 +13968,7 @@ class ContainerAppsDiagnosticsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listDetectorsPagingPage(resourceGroupName, containerAppName, options, settings);
-            }
+            },
         };
     }
     listDetectorsPagingPage(resourceGroupName, containerAppName, options, settings) {
@@ -13674,16 +13995,11 @@ class ContainerAppsDiagnosticsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listDetectorsPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listDetectorsPagingPage(resourceGroupName, containerAppName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listDetectorsPagingPage(resourceGroupName, containerAppName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -13715,7 +14031,7 @@ class ContainerAppsDiagnosticsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listRevisionsPagingPage(resourceGroupName, containerAppName, options, settings);
-            }
+            },
         };
     }
     listRevisionsPagingPage(resourceGroupName, containerAppName, options, settings) {
@@ -13742,16 +14058,11 @@ class ContainerAppsDiagnosticsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listRevisionsPagingAll_1() {
             var _a, e_2, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listRevisionsPagingPage(resourceGroupName, containerAppName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listRevisionsPagingPage(resourceGroupName, containerAppName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_2_1) { e_2 = { error: e_2_1 }; }
@@ -13770,7 +14081,7 @@ class ContainerAppsDiagnosticsImpl {
      * @param options The options parameters.
      */
     _listDetectors(resourceGroupName, containerAppName, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, containerAppName, options }, listDetectorsOperationSpec$1);
+        return this.client.sendOperationRequest({ resourceGroupName, containerAppName, options }, listDetectorsOperationSpec$2);
     }
     /**
      * Get a diagnostics result of a Container App.
@@ -13780,7 +14091,7 @@ class ContainerAppsDiagnosticsImpl {
      * @param options The options parameters.
      */
     getDetector(resourceGroupName, containerAppName, detectorName, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, containerAppName, detectorName, options }, getDetectorOperationSpec$1);
+        return this.client.sendOperationRequest({ resourceGroupName, containerAppName, detectorName, options }, getDetectorOperationSpec$2);
     }
     /**
      * Get the Revisions for a given Container App.
@@ -13818,7 +14129,7 @@ class ContainerAppsDiagnosticsImpl {
      * @param options The options parameters.
      */
     _listDetectorsNext(resourceGroupName, containerAppName, nextLink, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, containerAppName, nextLink, options }, listDetectorsNextOperationSpec);
+        return this.client.sendOperationRequest({ resourceGroupName, containerAppName, nextLink, options }, listDetectorsNextOperationSpec$1);
     }
     /**
      * ListRevisionsNext
@@ -13832,38 +14143,17 @@ class ContainerAppsDiagnosticsImpl {
     }
 }
 // Operation Specifications
-const serializer$d = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
-const listDetectorsOperationSpec$1 = {
+const serializer$f = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const listDetectorsOperationSpec$2 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/detectors",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: DiagnosticsCollection
+            bodyMapper: DiagnosticsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    queryParameters: [apiVersion],
-    urlParameters: [
-        $host,
-        subscriptionId,
-        resourceGroupName,
-        containerAppName
-    ],
-    headerParameters: [accept],
-    serializer: serializer$d
-};
-const getDetectorOperationSpec$1 = {
-    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/detectors/{detectorName}",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: Diagnostics
+            bodyMapper: DefaultErrorResponse,
         },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -13871,42 +14161,63 @@ const getDetectorOperationSpec$1 = {
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        detectorName
     ],
     headerParameters: [accept],
-    serializer: serializer$d
+    serializer: serializer$f,
+};
+const getDetectorOperationSpec$2 = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/detectors/{detectorName}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: Diagnostics,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        containerAppName,
+        detectorName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$f,
 };
 const listRevisionsOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/detectorProperties/revisionsApi/revisions/",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: RevisionCollection
+            bodyMapper: RevisionCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion, filter],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        containerAppName
+        containerAppName,
     ],
     headerParameters: [accept],
-    serializer: serializer$d
+    serializer: serializer$f,
 };
 const getRevisionOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/detectorProperties/revisionsApi/revisions/{revisionName}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: Revision
+            bodyMapper: Revision,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -13914,76 +14225,76 @@ const getRevisionOperationSpec = {
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        revisionName
+        revisionName,
     ],
     headerParameters: [accept],
-    serializer: serializer$d
+    serializer: serializer$f,
 };
 const getRootOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/detectorProperties/rootApi/",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ContainerApp
+            bodyMapper: ContainerApp,
         },
         404: {
-            isError: true
+            isError: true,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        containerAppName
+        containerAppName,
     ],
     headerParameters: [accept],
-    serializer: serializer$d
+    serializer: serializer$f,
 };
-const listDetectorsNextOperationSpec = {
+const listDetectorsNextOperationSpec$1 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: DiagnosticsCollection
+            bodyMapper: DiagnosticsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        nextLink
+        nextLink,
     ],
     headerParameters: [accept],
-    serializer: serializer$d
+    serializer: serializer$f,
 };
 const listRevisionsNextOperationSpec = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: RevisionCollection
+            bodyMapper: RevisionCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        nextLink
+        nextLink,
     ],
     headerParameters: [accept],
-    serializer: serializer$d
+    serializer: serializer$f,
 };
 
 /*
@@ -14009,7 +14320,7 @@ class ManagedEnvironmentDiagnosticsImpl {
      * @param options The options parameters.
      */
     listDetectors(resourceGroupName, environmentName, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, environmentName, options }, listDetectorsOperationSpec);
+        return this.client.sendOperationRequest({ resourceGroupName, environmentName, options }, listDetectorsOperationSpec$1);
     }
     /**
      * Get the diagnostics data for a Managed Environment used to host container apps.
@@ -14019,42 +14330,42 @@ class ManagedEnvironmentDiagnosticsImpl {
      * @param options The options parameters.
      */
     getDetector(resourceGroupName, environmentName, detectorName, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, environmentName, detectorName, options }, getDetectorOperationSpec);
+        return this.client.sendOperationRequest({ resourceGroupName, environmentName, detectorName, options }, getDetectorOperationSpec$1);
     }
 }
 // Operation Specifications
-const serializer$c = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
-const listDetectorsOperationSpec = {
+const serializer$e = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const listDetectorsOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/detectors",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: DiagnosticsCollection
+            bodyMapper: DiagnosticsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$c
+    serializer: serializer$e,
 };
-const getDetectorOperationSpec = {
+const getDetectorOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/detectors/{detectorName}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: Diagnostics
+            bodyMapper: Diagnostics,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -14062,10 +14373,10 @@ const getDetectorOperationSpec = {
         subscriptionId,
         resourceGroupName,
         detectorName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$c
+    serializer: serializer$e,
 };
 
 /*
@@ -14095,160 +14406,27 @@ class ManagedEnvironmentsDiagnosticsImpl {
     }
 }
 // Operation Specifications
-const serializer$b = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const serializer$d = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
 const getRootOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/detectorProperties/rootApi/",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ManagedEnvironment
+            bodyMapper: ManagedEnvironment,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$b
-};
-
-/*
- * Copyright (c) Microsoft Corporation.
- * Licensed under the MIT License.
- *
- * Code generated by Microsoft (R) AutoRest Code Generator.
- * Changes may cause incorrect behavior and will be lost if the code is regenerated.
- */
-/// <reference lib="esnext.asynciterable" />
-/** Class containing Operations operations. */
-class OperationsImpl {
-    /**
-     * Initialize a new instance of the class Operations class.
-     * @param client Reference to the service client
-     */
-    constructor(client) {
-        this.client = client;
-    }
-    /**
-     * Lists all of the available RP operations.
-     * @param options The options parameters.
-     */
-    list(options) {
-        const iter = this.listPagingAll(options);
-        return {
-            next() {
-                return iter.next();
-            },
-            [Symbol.asyncIterator]() {
-                return this;
-            },
-            byPage: (settings) => {
-                if (settings === null || settings === void 0 ? void 0 : settings.maxPageSize) {
-                    throw new Error("maxPageSize is not supported by this operation.");
-                }
-                return this.listPagingPage(options, settings);
-            }
-        };
-    }
-    listPagingPage(options, settings) {
-        return tslib.__asyncGenerator(this, arguments, function* listPagingPage_1() {
-            let result;
-            let continuationToken = settings === null || settings === void 0 ? void 0 : settings.continuationToken;
-            if (!continuationToken) {
-                result = yield tslib.__await(this._list(options));
-                let page = result.value || [];
-                continuationToken = result.nextLink;
-                setContinuationToken(page, continuationToken);
-                yield yield tslib.__await(page);
-            }
-            while (continuationToken) {
-                result = yield tslib.__await(this._listNext(continuationToken, options));
-                continuationToken = result.nextLink;
-                let page = result.value || [];
-                setContinuationToken(page, continuationToken);
-                yield yield tslib.__await(page);
-            }
-        });
-    }
-    listPagingAll(options) {
-        return tslib.__asyncGenerator(this, arguments, function* listPagingAll_1() {
-            var _a, e_1, _b, _c;
-            try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
-                    _c = _f.value;
-                    _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
-                }
-            }
-            catch (e_1_1) { e_1 = { error: e_1_1 }; }
-            finally {
-                try {
-                    if (!_d && !_a && (_b = _e.return)) yield tslib.__await(_b.call(_e));
-                }
-                finally { if (e_1) throw e_1.error; }
-            }
-        });
-    }
-    /**
-     * Lists all of the available RP operations.
-     * @param options The options parameters.
-     */
-    _list(options) {
-        return this.client.sendOperationRequest({ options }, listOperationSpec$5);
-    }
-    /**
-     * ListNext
-     * @param nextLink The nextLink from the previous successful call to the List method.
-     * @param options The options parameters.
-     */
-    _listNext(nextLink, options) {
-        return this.client.sendOperationRequest({ nextLink, options }, listNextOperationSpec$4);
-    }
-}
-// Operation Specifications
-const serializer$a = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
-const listOperationSpec$5 = {
-    path: "/providers/Microsoft.App/operations",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: AvailableOperations
-        },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    queryParameters: [apiVersion],
-    urlParameters: [$host],
-    headerParameters: [accept],
-    serializer: serializer$a
-};
-const listNextOperationSpec$4 = {
-    path: "{nextLink}",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: AvailableOperations
-        },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    urlParameters: [$host, nextLink],
-    headerParameters: [accept],
-    serializer: serializer$a
+    serializer: serializer$d,
 };
 
 /*
@@ -14269,6 +14447,69 @@ class JobsImpl {
         this.client = client;
     }
     /**
+     * Get the list of diagnostics for a Container App Job.
+     * @param resourceGroupName The name of the resource group. The name is case insensitive.
+     * @param jobName Job Name
+     * @param options The options parameters.
+     */
+    listDetectors(resourceGroupName, jobName, options) {
+        const iter = this.listDetectorsPagingAll(resourceGroupName, jobName, options);
+        return {
+            next() {
+                return iter.next();
+            },
+            [Symbol.asyncIterator]() {
+                return this;
+            },
+            byPage: (settings) => {
+                if (settings === null || settings === void 0 ? void 0 : settings.maxPageSize) {
+                    throw new Error("maxPageSize is not supported by this operation.");
+                }
+                return this.listDetectorsPagingPage(resourceGroupName, jobName, options, settings);
+            },
+        };
+    }
+    listDetectorsPagingPage(resourceGroupName, jobName, options, settings) {
+        return tslib.__asyncGenerator(this, arguments, function* listDetectorsPagingPage_1() {
+            let result;
+            let continuationToken = settings === null || settings === void 0 ? void 0 : settings.continuationToken;
+            if (!continuationToken) {
+                result = yield tslib.__await(this._listDetectors(resourceGroupName, jobName, options));
+                let page = result.value || [];
+                continuationToken = result.nextLink;
+                setContinuationToken(page, continuationToken);
+                yield yield tslib.__await(page);
+            }
+            while (continuationToken) {
+                result = yield tslib.__await(this._listDetectorsNext(resourceGroupName, jobName, continuationToken, options));
+                continuationToken = result.nextLink;
+                let page = result.value || [];
+                setContinuationToken(page, continuationToken);
+                yield yield tslib.__await(page);
+            }
+        });
+    }
+    listDetectorsPagingAll(resourceGroupName, jobName, options) {
+        return tslib.__asyncGenerator(this, arguments, function* listDetectorsPagingAll_1() {
+            var _a, e_1, _b, _c;
+            try {
+                for (var _d = true, _e = tslib.__asyncValues(this.listDetectorsPagingPage(resourceGroupName, jobName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
+                    _c = _f.value;
+                    _d = false;
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
+                }
+            }
+            catch (e_1_1) { e_1 = { error: e_1_1 }; }
+            finally {
+                try {
+                    if (!_d && !_a && (_b = _e.return)) yield tslib.__await(_b.call(_e));
+                }
+                finally { if (e_1) throw e_1.error; }
+            }
+        });
+    }
+    /**
      * Get the Container Apps Jobs in a given subscription.
      * @param options The options parameters.
      */
@@ -14286,7 +14527,7 @@ class JobsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listBySubscriptionPagingPage(options, settings);
-            }
+            },
         };
     }
     listBySubscriptionPagingPage(options, settings) {
@@ -14311,26 +14552,21 @@ class JobsImpl {
     }
     listBySubscriptionPagingAll(options) {
         return tslib.__asyncGenerator(this, arguments, function* listBySubscriptionPagingAll_1() {
-            var _a, e_1, _b, _c;
+            var _a, e_2, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listBySubscriptionPagingPage(options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listBySubscriptionPagingPage(options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
-            catch (e_1_1) { e_1 = { error: e_1_1 }; }
+            catch (e_2_1) { e_2 = { error: e_2_1 }; }
             finally {
                 try {
                     if (!_d && !_a && (_b = _e.return)) yield tslib.__await(_b.call(_e));
                 }
-                finally { if (e_1) throw e_1.error; }
+                finally { if (e_2) throw e_2.error; }
             }
         });
     }
@@ -14353,7 +14589,7 @@ class JobsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listByResourceGroupPagingPage(resourceGroupName, options, settings);
-            }
+            },
         };
     }
     listByResourceGroupPagingPage(resourceGroupName, options, settings) {
@@ -14378,28 +14614,52 @@ class JobsImpl {
     }
     listByResourceGroupPagingAll(resourceGroupName, options) {
         return tslib.__asyncGenerator(this, arguments, function* listByResourceGroupPagingAll_1() {
-            var _a, e_2, _b, _c;
+            var _a, e_3, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listByResourceGroupPagingPage(resourceGroupName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listByResourceGroupPagingPage(resourceGroupName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
-            catch (e_2_1) { e_2 = { error: e_2_1 }; }
+            catch (e_3_1) { e_3 = { error: e_3_1 }; }
             finally {
                 try {
                     if (!_d && !_a && (_b = _e.return)) yield tslib.__await(_b.call(_e));
                 }
-                finally { if (e_2) throw e_2.error; }
+                finally { if (e_3) throw e_3.error; }
             }
         });
+    }
+    /**
+     * Get the list of diagnostics for a Container App Job.
+     * @param resourceGroupName The name of the resource group. The name is case insensitive.
+     * @param jobName Job Name
+     * @param options The options parameters.
+     */
+    _listDetectors(resourceGroupName, jobName, options) {
+        return this.client.sendOperationRequest({ resourceGroupName, jobName, options }, listDetectorsOperationSpec);
+    }
+    /**
+     * Get the diagnostics data for a Container App Job.
+     * @param resourceGroupName The name of the resource group. The name is case insensitive.
+     * @param jobName Job Name
+     * @param detectorName Name of the Container App Job detector.
+     * @param options The options parameters.
+     */
+    getDetector(resourceGroupName, jobName, detectorName, options) {
+        return this.client.sendOperationRequest({ resourceGroupName, jobName, detectorName, options }, getDetectorOperationSpec);
+    }
+    /**
+     * Get the properties of a Container App Job.
+     * @param resourceGroupName The name of the resource group. The name is case insensitive.
+     * @param jobName Job Name
+     * @param apiName Proxy API Name for Container App Job.
+     * @param options The options parameters.
+     */
+    proxyGet(resourceGroupName, jobName, apiName, options) {
+        return this.client.sendOperationRequest({ resourceGroupName, jobName, apiName, options }, proxyGetOperationSpec);
     }
     /**
      * Get the Container Apps Jobs in a given subscription.
@@ -14452,19 +14712,19 @@ class JobsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
                 sendOperationFn,
                 args: { resourceGroupName, jobName, jobEnvelope, options },
-                spec: createOrUpdateOperationSpec$6
+                spec: createOrUpdateOperationSpec$6,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
                 intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
-                resourceLocationConfig: "azure-async-operation"
+                resourceLocationConfig: "azure-async-operation",
             });
             yield poller.poll();
             return poller;
@@ -14509,19 +14769,19 @@ class JobsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
                 sendOperationFn,
                 args: { resourceGroupName, jobName, options },
-                spec: deleteOperationSpec$6
+                spec: deleteOperationSpec$6,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
                 intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
-                resourceLocationConfig: "location"
+                resourceLocationConfig: "location",
             });
             yield poller.poll();
             return poller;
@@ -14566,18 +14826,18 @@ class JobsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
                 sendOperationFn,
                 args: { resourceGroupName, jobName, jobEnvelope, options },
-                spec: updateOperationSpec$3
+                spec: updateOperationSpec$3,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
-                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs
+                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
             });
             yield poller.poll();
             return poller;
@@ -14622,19 +14882,19 @@ class JobsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
                 sendOperationFn,
                 args: { resourceGroupName, jobName, options },
-                spec: startOperationSpec
+                spec: startOperationSpec,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
                 intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
-                resourceLocationConfig: "location"
+                resourceLocationConfig: "location",
             });
             yield poller.poll();
             return poller;
@@ -14679,19 +14939,19 @@ class JobsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
                 sendOperationFn,
                 args: { resourceGroupName, jobName, jobExecutionName, options },
-                spec: stopExecutionOperationSpec
+                spec: stopExecutionOperationSpec,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
                 intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
-                resourceLocationConfig: "location"
+                resourceLocationConfig: "location",
             });
             yield poller.poll();
             return poller;
@@ -14736,19 +14996,19 @@ class JobsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
                 sendOperationFn,
                 args: { resourceGroupName, jobName, options },
-                spec: stopMultipleExecutionsOperationSpec
+                spec: stopMultipleExecutionsOperationSpec,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
                 intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
-                resourceLocationConfig: "location"
+                resourceLocationConfig: "location",
             });
             yield poller.poll();
             return poller;
@@ -14776,6 +15036,16 @@ class JobsImpl {
         return this.client.sendOperationRequest({ resourceGroupName, jobName, options }, listSecretsOperationSpec$1);
     }
     /**
+     * ListDetectorsNext
+     * @param resourceGroupName The name of the resource group. The name is case insensitive.
+     * @param jobName Job Name
+     * @param nextLink The nextLink from the previous successful call to the ListDetectors method.
+     * @param options The options parameters.
+     */
+    _listDetectorsNext(resourceGroupName, jobName, nextLink, options) {
+        return this.client.sendOperationRequest({ resourceGroupName, jobName, nextLink, options }, listDetectorsNextOperationSpec);
+    }
+    /**
      * ListBySubscriptionNext
      * @param nextLink The nextLink from the previous successful call to the ListBySubscription method.
      * @param options The options parameters.
@@ -14794,83 +15064,148 @@ class JobsImpl {
     }
 }
 // Operation Specifications
-const serializer$9 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
-const listBySubscriptionOperationSpec$1 = {
-    path: "/subscriptions/{subscriptionId}/providers/Microsoft.App/jobs",
+const serializer$c = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const listDetectorsOperationSpec = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs/{jobName}/detectors",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: JobsCollection
+            bodyMapper: DiagnosticsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    queryParameters: [apiVersion],
-    urlParameters: [$host, subscriptionId],
-    headerParameters: [accept],
-    serializer: serializer$9
-};
-const listByResourceGroupOperationSpec$1 = {
-    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: JobsCollection
+            bodyMapper: DefaultErrorResponse,
         },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    queryParameters: [apiVersion],
-    urlParameters: [
-        $host,
-        subscriptionId,
-        resourceGroupName
-    ],
-    headerParameters: [accept],
-    serializer: serializer$9
-};
-const getOperationSpec$6 = {
-    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs/{jobName}",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: Job
-        },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        jobName
+        jobName,
     ],
     headerParameters: [accept],
-    serializer: serializer$9
+    serializer: serializer$c,
+};
+const getDetectorOperationSpec = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs/{jobName}/detectors/{detectorName}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: Diagnostics,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        jobName,
+        detectorName1,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$c,
+};
+const proxyGetOperationSpec = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs/{jobName}/detectorProperties/{apiName}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: Job,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        jobName,
+        apiName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$c,
+};
+const listBySubscriptionOperationSpec$1 = {
+    path: "/subscriptions/{subscriptionId}/providers/Microsoft.App/jobs",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: JobsCollection,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [$host, subscriptionId],
+    headerParameters: [accept],
+    serializer: serializer$c,
+};
+const listByResourceGroupOperationSpec$1 = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: JobsCollection,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$c,
+};
+const getOperationSpec$6 = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs/{jobName}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: Job,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        jobName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$c,
 };
 const createOrUpdateOperationSpec$6 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs/{jobName}",
     httpMethod: "PUT",
     responses: {
         200: {
-            bodyMapper: Job
+            bodyMapper: Job,
         },
         201: {
-            bodyMapper: Job
+            bodyMapper: Job,
         },
         202: {
-            bodyMapper: Job
+            bodyMapper: Job,
         },
         204: {
-            bodyMapper: Job
+            bodyMapper: Job,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: jobEnvelope,
     queryParameters: [apiVersion],
@@ -14878,11 +15213,11 @@ const createOrUpdateOperationSpec$6 = {
         $host,
         subscriptionId,
         resourceGroupName,
-        jobName
+        jobName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$9
+    serializer: serializer$c,
 };
 const deleteOperationSpec$6 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs/{jobName}",
@@ -14893,38 +15228,38 @@ const deleteOperationSpec$6 = {
         202: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        jobName
+        jobName,
     ],
     headerParameters: [accept],
-    serializer: serializer$9
+    serializer: serializer$c,
 };
 const updateOperationSpec$3 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs/{jobName}",
     httpMethod: "PATCH",
     responses: {
         200: {
-            bodyMapper: Job
+            bodyMapper: Job,
         },
         201: {
-            bodyMapper: Job
+            bodyMapper: Job,
         },
         202: {
-            bodyMapper: Job
+            bodyMapper: Job,
         },
         204: {
-            bodyMapper: Job
+            bodyMapper: Job,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: jobEnvelope1,
     queryParameters: [apiVersion],
@@ -14932,31 +15267,31 @@ const updateOperationSpec$3 = {
         $host,
         subscriptionId,
         resourceGroupName,
-        jobName
+        jobName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$9
+    serializer: serializer$c,
 };
 const startOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs/{jobName}/start",
     httpMethod: "POST",
     responses: {
         200: {
-            bodyMapper: JobExecutionBase
+            bodyMapper: JobExecutionBase,
         },
         201: {
-            bodyMapper: JobExecutionBase
+            bodyMapper: JobExecutionBase,
         },
         202: {
-            bodyMapper: JobExecutionBase
+            bodyMapper: JobExecutionBase,
         },
         204: {
-            bodyMapper: JobExecutionBase
+            bodyMapper: JobExecutionBase,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: template,
     queryParameters: [apiVersion],
@@ -14964,11 +15299,11 @@ const startOperationSpec = {
         $host,
         subscriptionId,
         resourceGroupName,
-        jobName
+        jobName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$9
+    serializer: serializer$c,
 };
 const stopExecutionOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs/{jobName}/executions/{jobExecutionName}/stop",
@@ -14979,8 +15314,8 @@ const stopExecutionOperationSpec = {
         202: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -14988,100 +15323,249 @@ const stopExecutionOperationSpec = {
         subscriptionId,
         resourceGroupName,
         jobName,
-        jobExecutionName
+        jobExecutionName,
     ],
     headerParameters: [accept],
-    serializer: serializer$9
+    serializer: serializer$c,
 };
 const stopMultipleExecutionsOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs/{jobName}/stop",
     httpMethod: "POST",
     responses: {
         200: {
-            bodyMapper: ContainerAppJobExecutions
+            bodyMapper: ContainerAppJobExecutions,
         },
         201: {
-            bodyMapper: ContainerAppJobExecutions
+            bodyMapper: ContainerAppJobExecutions,
         },
         202: {
-            bodyMapper: ContainerAppJobExecutions
+            bodyMapper: ContainerAppJobExecutions,
         },
         204: {
-            bodyMapper: ContainerAppJobExecutions
+            bodyMapper: ContainerAppJobExecutions,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        jobName
+        jobName,
     ],
     headerParameters: [accept],
-    serializer: serializer$9
+    serializer: serializer$c,
 };
 const listSecretsOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs/{jobName}/listSecrets",
     httpMethod: "POST",
     responses: {
         200: {
-            bodyMapper: JobSecretsCollection
+            bodyMapper: JobSecretsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        jobName
+        jobName,
     ],
     headerParameters: [accept],
-    serializer: serializer$9
+    serializer: serializer$c,
+};
+const listDetectorsNextOperationSpec = {
+    path: "{nextLink}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: DiagnosticsCollection,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        nextLink,
+        jobName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$c,
 };
 const listBySubscriptionNextOperationSpec$1 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: JobsCollection
+            bodyMapper: JobsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
-        nextLink
+        nextLink,
     ],
     headerParameters: [accept],
-    serializer: serializer$9
+    serializer: serializer$c,
 };
 const listByResourceGroupNextOperationSpec$1 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: JobsCollection
+            bodyMapper: JobsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        nextLink
+        nextLink,
     ],
     headerParameters: [accept],
-    serializer: serializer$9
+    serializer: serializer$c,
+};
+
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT License.
+ *
+ * Code generated by Microsoft (R) AutoRest Code Generator.
+ * Changes may cause incorrect behavior and will be lost if the code is regenerated.
+ */
+/// <reference lib="esnext.asynciterable" />
+/** Class containing Operations operations. */
+class OperationsImpl {
+    /**
+     * Initialize a new instance of the class Operations class.
+     * @param client Reference to the service client
+     */
+    constructor(client) {
+        this.client = client;
+    }
+    /**
+     * Lists all of the available RP operations.
+     * @param options The options parameters.
+     */
+    list(options) {
+        const iter = this.listPagingAll(options);
+        return {
+            next() {
+                return iter.next();
+            },
+            [Symbol.asyncIterator]() {
+                return this;
+            },
+            byPage: (settings) => {
+                if (settings === null || settings === void 0 ? void 0 : settings.maxPageSize) {
+                    throw new Error("maxPageSize is not supported by this operation.");
+                }
+                return this.listPagingPage(options, settings);
+            },
+        };
+    }
+    listPagingPage(options, settings) {
+        return tslib.__asyncGenerator(this, arguments, function* listPagingPage_1() {
+            let result;
+            let continuationToken = settings === null || settings === void 0 ? void 0 : settings.continuationToken;
+            if (!continuationToken) {
+                result = yield tslib.__await(this._list(options));
+                let page = result.value || [];
+                continuationToken = result.nextLink;
+                setContinuationToken(page, continuationToken);
+                yield yield tslib.__await(page);
+            }
+            while (continuationToken) {
+                result = yield tslib.__await(this._listNext(continuationToken, options));
+                continuationToken = result.nextLink;
+                let page = result.value || [];
+                setContinuationToken(page, continuationToken);
+                yield yield tslib.__await(page);
+            }
+        });
+    }
+    listPagingAll(options) {
+        return tslib.__asyncGenerator(this, arguments, function* listPagingAll_1() {
+            var _a, e_1, _b, _c;
+            try {
+                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
+                    _c = _f.value;
+                    _d = false;
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
+                }
+            }
+            catch (e_1_1) { e_1 = { error: e_1_1 }; }
+            finally {
+                try {
+                    if (!_d && !_a && (_b = _e.return)) yield tslib.__await(_b.call(_e));
+                }
+                finally { if (e_1) throw e_1.error; }
+            }
+        });
+    }
+    /**
+     * Lists all of the available RP operations.
+     * @param options The options parameters.
+     */
+    _list(options) {
+        return this.client.sendOperationRequest({ options }, listOperationSpec$7);
+    }
+    /**
+     * ListNext
+     * @param nextLink The nextLink from the previous successful call to the List method.
+     * @param options The options parameters.
+     */
+    _listNext(nextLink, options) {
+        return this.client.sendOperationRequest({ nextLink, options }, listNextOperationSpec$6);
+    }
+}
+// Operation Specifications
+const serializer$b = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const listOperationSpec$7 = {
+    path: "/providers/Microsoft.App/operations",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: AvailableOperations,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [$host],
+    headerParameters: [accept],
+    serializer: serializer$b,
+};
+const listNextOperationSpec$6 = {
+    path: "{nextLink}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: AvailableOperations,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    urlParameters: [$host, nextLink],
+    headerParameters: [accept],
+    serializer: serializer$b,
 };
 
 /*
@@ -15121,7 +15605,7 @@ class JobsExecutionsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listPagingPage(resourceGroupName, jobName, options, settings);
-            }
+            },
         };
     }
     listPagingPage(resourceGroupName, jobName, options, settings) {
@@ -15148,16 +15632,11 @@ class JobsExecutionsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(resourceGroupName, jobName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(resourceGroupName, jobName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -15176,7 +15655,7 @@ class JobsExecutionsImpl {
      * @param options The options parameters.
      */
     _list(resourceGroupName, jobName, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, jobName, options }, listOperationSpec$4);
+        return this.client.sendOperationRequest({ resourceGroupName, jobName, options }, listOperationSpec$6);
     }
     /**
      * ListNext
@@ -15186,52 +15665,52 @@ class JobsExecutionsImpl {
      * @param options The options parameters.
      */
     _listNext(resourceGroupName, jobName, nextLink, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, jobName, nextLink, options }, listNextOperationSpec$3);
+        return this.client.sendOperationRequest({ resourceGroupName, jobName, nextLink, options }, listNextOperationSpec$5);
     }
 }
 // Operation Specifications
-const serializer$8 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
-const listOperationSpec$4 = {
+const serializer$a = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const listOperationSpec$6 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/jobs/{jobName}/executions",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ContainerAppJobExecutions
+            bodyMapper: ContainerAppJobExecutions,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion, filter],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        jobName
+        jobName,
     ],
     headerParameters: [accept],
-    serializer: serializer$8
+    serializer: serializer$a,
 };
-const listNextOperationSpec$3 = {
+const listNextOperationSpec$5 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ContainerAppJobExecutions
+            bodyMapper: ContainerAppJobExecutions,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
         nextLink,
-        jobName
+        jobName,
     ],
     headerParameters: [accept],
-    serializer: serializer$8
+    serializer: serializer$a,
 };
 
 /*
@@ -15269,7 +15748,7 @@ class ManagedEnvironmentsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listBySubscriptionPagingPage(options, settings);
-            }
+            },
         };
     }
     listBySubscriptionPagingPage(options, settings) {
@@ -15296,16 +15775,11 @@ class ManagedEnvironmentsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listBySubscriptionPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listBySubscriptionPagingPage(options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listBySubscriptionPagingPage(options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -15336,7 +15810,7 @@ class ManagedEnvironmentsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listByResourceGroupPagingPage(resourceGroupName, options, settings);
-            }
+            },
         };
     }
     listByResourceGroupPagingPage(resourceGroupName, options, settings) {
@@ -15363,16 +15837,11 @@ class ManagedEnvironmentsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listByResourceGroupPagingAll_1() {
             var _a, e_2, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listByResourceGroupPagingPage(resourceGroupName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listByResourceGroupPagingPage(resourceGroupName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_2_1) { e_2 = { error: e_2_1 }; }
@@ -15404,7 +15873,7 @@ class ManagedEnvironmentsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listWorkloadProfileStatesPagingPage(resourceGroupName, environmentName, options, settings);
-            }
+            },
         };
     }
     listWorkloadProfileStatesPagingPage(resourceGroupName, environmentName, options, settings) {
@@ -15431,16 +15900,11 @@ class ManagedEnvironmentsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listWorkloadProfileStatesPagingAll_1() {
             var _a, e_3, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listWorkloadProfileStatesPagingPage(resourceGroupName, environmentName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listWorkloadProfileStatesPagingPage(resourceGroupName, environmentName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_3_1) { e_3 = { error: e_3_1 }; }
@@ -15503,8 +15967,8 @@ class ManagedEnvironmentsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
@@ -15513,13 +15977,13 @@ class ManagedEnvironmentsImpl {
                     resourceGroupName,
                     environmentName,
                     environmentEnvelope,
-                    options
+                    options,
                 },
-                spec: createOrUpdateOperationSpec$5
+                spec: createOrUpdateOperationSpec$5,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
-                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs
+                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
             });
             yield poller.poll();
             return poller;
@@ -15564,18 +16028,18 @@ class ManagedEnvironmentsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
                 sendOperationFn,
                 args: { resourceGroupName, environmentName, options },
-                spec: deleteOperationSpec$5
+                spec: deleteOperationSpec$5,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
-                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs
+                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
             });
             yield poller.poll();
             return poller;
@@ -15620,8 +16084,8 @@ class ManagedEnvironmentsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
@@ -15630,13 +16094,13 @@ class ManagedEnvironmentsImpl {
                     resourceGroupName,
                     environmentName,
                     environmentEnvelope,
-                    options
+                    options,
                 },
-                spec: updateOperationSpec$2
+                spec: updateOperationSpec$2,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
-                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs
+                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
             });
             yield poller.poll();
             return poller;
@@ -15703,83 +16167,83 @@ class ManagedEnvironmentsImpl {
     }
 }
 // Operation Specifications
-const serializer$7 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const serializer$9 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
 const listBySubscriptionOperationSpec = {
     path: "/subscriptions/{subscriptionId}/providers/Microsoft.App/managedEnvironments",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ManagedEnvironmentsCollection
+            bodyMapper: ManagedEnvironmentsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [$host, subscriptionId],
     headerParameters: [accept],
-    serializer: serializer$7
+    serializer: serializer$9,
 };
 const listByResourceGroupOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ManagedEnvironmentsCollection
+            bodyMapper: ManagedEnvironmentsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    queryParameters: [apiVersion],
-    urlParameters: [
-        $host,
-        subscriptionId,
-        resourceGroupName
-    ],
-    headerParameters: [accept],
-    serializer: serializer$7
-};
-const getOperationSpec$5 = {
-    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: ManagedEnvironment
+            bodyMapper: DefaultErrorResponse,
         },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        environmentName
     ],
     headerParameters: [accept],
-    serializer: serializer$7
+    serializer: serializer$9,
+};
+const getOperationSpec$5 = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: ManagedEnvironment,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        environmentName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$9,
 };
 const createOrUpdateOperationSpec$5 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}",
     httpMethod: "PUT",
     responses: {
         200: {
-            bodyMapper: ManagedEnvironment
+            bodyMapper: ManagedEnvironment,
         },
         201: {
-            bodyMapper: ManagedEnvironment
+            bodyMapper: ManagedEnvironment,
         },
         202: {
-            bodyMapper: ManagedEnvironment
+            bodyMapper: ManagedEnvironment,
         },
         204: {
-            bodyMapper: ManagedEnvironment
+            bodyMapper: ManagedEnvironment,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: environmentEnvelope1,
     queryParameters: [apiVersion],
@@ -15787,11 +16251,11 @@ const createOrUpdateOperationSpec$5 = {
         $host,
         subscriptionId,
         resourceGroupName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$7
+    serializer: serializer$9,
 };
 const deleteOperationSpec$5 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}",
@@ -15802,38 +16266,38 @@ const deleteOperationSpec$5 = {
         202: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$7
+    serializer: serializer$9,
 };
 const updateOperationSpec$2 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}",
     httpMethod: "PATCH",
     responses: {
         200: {
-            bodyMapper: ManagedEnvironment
+            bodyMapper: ManagedEnvironment,
         },
         201: {
-            bodyMapper: ManagedEnvironment
+            bodyMapper: ManagedEnvironment,
         },
         202: {
-            bodyMapper: ManagedEnvironment
+            bodyMapper: ManagedEnvironment,
         },
         204: {
-            bodyMapper: ManagedEnvironment
+            bodyMapper: ManagedEnvironment,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: environmentEnvelope1,
     queryParameters: [apiVersion],
@@ -15841,113 +16305,113 @@ const updateOperationSpec$2 = {
         $host,
         subscriptionId,
         resourceGroupName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$7
+    serializer: serializer$9,
 };
 const getAuthTokenOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/getAuthtoken",
     httpMethod: "POST",
     responses: {
         200: {
-            bodyMapper: EnvironmentAuthToken
+            bodyMapper: EnvironmentAuthToken,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$7
+    serializer: serializer$9,
 };
 const listWorkloadProfileStatesOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/workloadProfileStates",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: WorkloadProfileStatesCollection
+            bodyMapper: WorkloadProfileStatesCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$7
+    serializer: serializer$9,
 };
 const listBySubscriptionNextOperationSpec = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ManagedEnvironmentsCollection
+            bodyMapper: ManagedEnvironmentsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
-        nextLink
+        nextLink,
     ],
     headerParameters: [accept],
-    serializer: serializer$7
+    serializer: serializer$9,
 };
 const listByResourceGroupNextOperationSpec = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ManagedEnvironmentsCollection
+            bodyMapper: ManagedEnvironmentsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    urlParameters: [
-        $host,
-        subscriptionId,
-        resourceGroupName,
-        nextLink
-    ],
-    headerParameters: [accept],
-    serializer: serializer$7
-};
-const listWorkloadProfileStatesNextOperationSpec = {
-    path: "{nextLink}",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: WorkloadProfileStatesCollection
+            bodyMapper: DefaultErrorResponse,
         },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
         nextLink,
-        environmentName
     ],
     headerParameters: [accept],
-    serializer: serializer$7
+    serializer: serializer$9,
+};
+const listWorkloadProfileStatesNextOperationSpec = {
+    path: "{nextLink}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: WorkloadProfileStatesCollection,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        nextLink,
+        environmentName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$9,
 };
 
 /*
@@ -15987,7 +16451,7 @@ class CertificatesImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listPagingPage(resourceGroupName, environmentName, options, settings);
-            }
+            },
         };
     }
     listPagingPage(resourceGroupName, environmentName, options, settings) {
@@ -16014,16 +16478,11 @@ class CertificatesImpl {
         return tslib.__asyncGenerator(this, arguments, function* listPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(resourceGroupName, environmentName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(resourceGroupName, environmentName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -16042,7 +16501,7 @@ class CertificatesImpl {
      * @param options The options parameters.
      */
     _list(resourceGroupName, environmentName, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, environmentName, options }, listOperationSpec$3);
+        return this.client.sendOperationRequest({ resourceGroupName, environmentName, options }, listOperationSpec$5);
     }
     /**
      * Get the specified Certificate.
@@ -16088,7 +16547,7 @@ class CertificatesImpl {
             environmentName,
             certificateName,
             certificateEnvelope,
-            options
+            options,
         }, updateOperationSpec$1);
     }
     /**
@@ -16099,42 +16558,42 @@ class CertificatesImpl {
      * @param options The options parameters.
      */
     _listNext(resourceGroupName, environmentName, nextLink, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, environmentName, nextLink, options }, listNextOperationSpec$2);
+        return this.client.sendOperationRequest({ resourceGroupName, environmentName, nextLink, options }, listNextOperationSpec$4);
     }
 }
 // Operation Specifications
-const serializer$6 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
-const listOperationSpec$3 = {
+const serializer$8 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const listOperationSpec$5 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/certificates",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: CertificateCollection
+            bodyMapper: CertificateCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$6
+    serializer: serializer$8,
 };
 const getOperationSpec$4 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/certificates/{certificateName}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: Certificate
+            bodyMapper: Certificate,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -16142,21 +16601,21 @@ const getOperationSpec$4 = {
         subscriptionId,
         resourceGroupName,
         certificateName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$6
+    serializer: serializer$8,
 };
 const createOrUpdateOperationSpec$4 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/certificates/{certificateName}",
     httpMethod: "PUT",
     responses: {
         200: {
-            bodyMapper: Certificate
+            bodyMapper: Certificate,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: certificateEnvelope,
     queryParameters: [apiVersion],
@@ -16165,11 +16624,11 @@ const createOrUpdateOperationSpec$4 = {
         subscriptionId,
         resourceGroupName,
         certificateName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$6
+    serializer: serializer$8,
 };
 const deleteOperationSpec$4 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/certificates/{certificateName}",
@@ -16178,8 +16637,8 @@ const deleteOperationSpec$4 = {
         200: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -16187,21 +16646,21 @@ const deleteOperationSpec$4 = {
         subscriptionId,
         resourceGroupName,
         certificateName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$6
+    serializer: serializer$8,
 };
 const updateOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/certificates/{certificateName}",
     httpMethod: "PATCH",
     responses: {
         200: {
-            bodyMapper: Certificate
+            bodyMapper: Certificate,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: certificateEnvelope1,
     queryParameters: [apiVersion],
@@ -16210,32 +16669,32 @@ const updateOperationSpec$1 = {
         subscriptionId,
         resourceGroupName,
         certificateName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$6
+    serializer: serializer$8,
 };
-const listNextOperationSpec$2 = {
+const listNextOperationSpec$4 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: CertificateCollection
+            bodyMapper: CertificateCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
         nextLink,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$6
+    serializer: serializer$8,
 };
 
 /*
@@ -16275,7 +16734,7 @@ class ManagedCertificatesImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listPagingPage(resourceGroupName, environmentName, options, settings);
-            }
+            },
         };
     }
     listPagingPage(resourceGroupName, environmentName, options, settings) {
@@ -16302,16 +16761,11 @@ class ManagedCertificatesImpl {
         return tslib.__asyncGenerator(this, arguments, function* listPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(resourceGroupName, environmentName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(resourceGroupName, environmentName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -16360,8 +16814,8 @@ class ManagedCertificatesImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
@@ -16370,14 +16824,14 @@ class ManagedCertificatesImpl {
                     resourceGroupName,
                     environmentName,
                     managedCertificateName,
-                    options
+                    options,
                 },
-                spec: createOrUpdateOperationSpec$3
+                spec: createOrUpdateOperationSpec$3,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
                 intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
-                resourceLocationConfig: "azure-async-operation"
+                resourceLocationConfig: "azure-async-operation",
             });
             yield poller.poll();
             return poller;
@@ -16420,7 +16874,7 @@ class ManagedCertificatesImpl {
             environmentName,
             managedCertificateName,
             managedCertificateEnvelope,
-            options
+            options,
         }, updateOperationSpec);
     }
     /**
@@ -16430,7 +16884,7 @@ class ManagedCertificatesImpl {
      * @param options The options parameters.
      */
     _list(resourceGroupName, environmentName, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, environmentName, options }, listOperationSpec$2);
+        return this.client.sendOperationRequest({ resourceGroupName, environmentName, options }, listOperationSpec$4);
     }
     /**
      * ListNext
@@ -16440,21 +16894,21 @@ class ManagedCertificatesImpl {
      * @param options The options parameters.
      */
     _listNext(resourceGroupName, environmentName, nextLink, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, environmentName, nextLink, options }, listNextOperationSpec$1);
+        return this.client.sendOperationRequest({ resourceGroupName, environmentName, nextLink, options }, listNextOperationSpec$3);
     }
 }
 // Operation Specifications
-const serializer$5 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const serializer$7 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
 const getOperationSpec$3 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/managedCertificates/{managedCertificateName}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ManagedCertificate
+            bodyMapper: ManagedCertificate,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -16462,33 +16916,33 @@ const getOperationSpec$3 = {
         subscriptionId,
         resourceGroupName,
         environmentName,
-        managedCertificateName
+        managedCertificateName,
     ],
     headerParameters: [accept],
-    serializer: serializer$5
+    serializer: serializer$7,
 };
 const createOrUpdateOperationSpec$3 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/managedCertificates/{managedCertificateName}",
     httpMethod: "PUT",
     responses: {
         200: {
-            bodyMapper: ManagedCertificate
+            bodyMapper: ManagedCertificate,
         },
         201: {
-            bodyMapper: ManagedCertificate
+            bodyMapper: ManagedCertificate,
         },
         202: {
-            bodyMapper: ManagedCertificate
+            bodyMapper: ManagedCertificate,
         },
         204: {
-            bodyMapper: ManagedCertificate
+            bodyMapper: ManagedCertificate,
         },
         400: {
-            isError: true
+            isError: true,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: managedCertificateEnvelope,
     queryParameters: [apiVersion],
@@ -16497,11 +16951,11 @@ const createOrUpdateOperationSpec$3 = {
         subscriptionId,
         resourceGroupName,
         environmentName,
-        managedCertificateName
+        managedCertificateName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$5
+    serializer: serializer$7,
 };
 const deleteOperationSpec$3 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/managedCertificates/{managedCertificateName}",
@@ -16510,8 +16964,8 @@ const deleteOperationSpec$3 = {
         200: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -16519,21 +16973,21 @@ const deleteOperationSpec$3 = {
         subscriptionId,
         resourceGroupName,
         environmentName,
-        managedCertificateName
+        managedCertificateName,
     ],
     headerParameters: [accept],
-    serializer: serializer$5
+    serializer: serializer$7,
 };
 const updateOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/managedCertificates/{managedCertificateName}",
     httpMethod: "PATCH",
     responses: {
         200: {
-            bodyMapper: ManagedCertificate
+            bodyMapper: ManagedCertificate,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: managedCertificateEnvelope1,
     queryParameters: [apiVersion],
@@ -16542,53 +16996,53 @@ const updateOperationSpec = {
         subscriptionId,
         resourceGroupName,
         environmentName,
-        managedCertificateName
+        managedCertificateName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$5
+    serializer: serializer$7,
 };
-const listOperationSpec$2 = {
+const listOperationSpec$4 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/managedCertificates",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ManagedCertificateCollection
+            bodyMapper: ManagedCertificateCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$5
+    serializer: serializer$7,
 };
-const listNextOperationSpec$1 = {
+const listNextOperationSpec$3 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ManagedCertificateCollection
+            bodyMapper: ManagedCertificateCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
         nextLink,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$5
+    serializer: serializer$7,
 };
 
 /*
@@ -16619,22 +17073,22 @@ class NamespacesImpl {
             resourceGroupName,
             environmentName,
             checkNameAvailabilityRequest,
-            options
+            options,
         }, checkNameAvailabilityOperationSpec);
     }
 }
 // Operation Specifications
-const serializer$4 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const serializer$6 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
 const checkNameAvailabilityOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/checkNameAvailability",
     httpMethod: "POST",
     responses: {
         200: {
-            bodyMapper: CheckNameAvailabilityResponse
+            bodyMapper: CheckNameAvailabilityResponse,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: checkNameAvailabilityRequest,
     queryParameters: [apiVersion],
@@ -16642,11 +17096,11 @@ const checkNameAvailabilityOperationSpec = {
         $host,
         subscriptionId,
         resourceGroupName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$4
+    serializer: serializer$6,
 };
 
 /*
@@ -16686,7 +17140,7 @@ class DaprComponentsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listPagingPage(resourceGroupName, environmentName, options, settings);
-            }
+            },
         };
     }
     listPagingPage(resourceGroupName, environmentName, options, settings) {
@@ -16713,16 +17167,11 @@ class DaprComponentsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(resourceGroupName, environmentName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(resourceGroupName, environmentName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -16741,7 +17190,7 @@ class DaprComponentsImpl {
      * @param options The options parameters.
      */
     _list(resourceGroupName, environmentName, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, environmentName, options }, listOperationSpec$1);
+        return this.client.sendOperationRequest({ resourceGroupName, environmentName, options }, listOperationSpec$3);
     }
     /**
      * Get a dapr component.
@@ -16767,7 +17216,7 @@ class DaprComponentsImpl {
             environmentName,
             componentName,
             daprComponentEnvelope,
-            options
+            options,
         }, createOrUpdateOperationSpec$2);
     }
     /**
@@ -16798,42 +17247,42 @@ class DaprComponentsImpl {
      * @param options The options parameters.
      */
     _listNext(resourceGroupName, environmentName, nextLink, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, environmentName, nextLink, options }, listNextOperationSpec);
+        return this.client.sendOperationRequest({ resourceGroupName, environmentName, nextLink, options }, listNextOperationSpec$2);
     }
 }
 // Operation Specifications
-const serializer$3 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
-const listOperationSpec$1 = {
+const serializer$5 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const listOperationSpec$3 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/daprComponents",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: DaprComponentsCollection
+            bodyMapper: DaprComponentsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$3
+    serializer: serializer$5,
 };
 const getOperationSpec$2 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/daprComponents/{componentName}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: DaprComponent
+            bodyMapper: DaprComponent,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -16841,21 +17290,21 @@ const getOperationSpec$2 = {
         subscriptionId,
         resourceGroupName,
         componentName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$3
+    serializer: serializer$5,
 };
 const createOrUpdateOperationSpec$2 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/daprComponents/{componentName}",
     httpMethod: "PUT",
     responses: {
         200: {
-            bodyMapper: DaprComponent
+            bodyMapper: DaprComponent,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: daprComponentEnvelope,
     queryParameters: [apiVersion],
@@ -16864,11 +17313,11 @@ const createOrUpdateOperationSpec$2 = {
         subscriptionId,
         resourceGroupName,
         componentName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$3
+    serializer: serializer$5,
 };
 const deleteOperationSpec$2 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/daprComponents/{componentName}",
@@ -16877,8 +17326,8 @@ const deleteOperationSpec$2 = {
         200: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -16886,21 +17335,21 @@ const deleteOperationSpec$2 = {
         subscriptionId,
         resourceGroupName,
         componentName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$3
+    serializer: serializer$5,
 };
 const listSecretsOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/daprComponents/{componentName}/listSecrets",
     httpMethod: "POST",
     responses: {
         200: {
-            bodyMapper: DaprSecretsCollection
+            bodyMapper: DaprSecretsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -16908,31 +17357,31 @@ const listSecretsOperationSpec = {
         subscriptionId,
         resourceGroupName,
         componentName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$3
+    serializer: serializer$5,
 };
-const listNextOperationSpec = {
+const listNextOperationSpec$2 = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: DaprComponentsCollection
+            bodyMapper: DaprComponentsCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
         nextLink,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$3
+    serializer: serializer$5,
 };
 
 /*
@@ -16958,7 +17407,7 @@ class ManagedEnvironmentsStoragesImpl {
      * @param options The options parameters.
      */
     list(resourceGroupName, environmentName, options) {
-        return this.client.sendOperationRequest({ resourceGroupName, environmentName, options }, listOperationSpec);
+        return this.client.sendOperationRequest({ resourceGroupName, environmentName, options }, listOperationSpec$2);
     }
     /**
      * Get storage for a managedEnvironment.
@@ -16984,7 +17433,7 @@ class ManagedEnvironmentsStoragesImpl {
             environmentName,
             storageName,
             storageEnvelope,
-            options
+            options,
         }, createOrUpdateOperationSpec$1);
     }
     /**
@@ -16999,38 +17448,38 @@ class ManagedEnvironmentsStoragesImpl {
     }
 }
 // Operation Specifications
-const serializer$2 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
-const listOperationSpec = {
+const serializer$4 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const listOperationSpec$2 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/storages",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ManagedEnvironmentStoragesCollection
+            bodyMapper: ManagedEnvironmentStoragesCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$2
+    serializer: serializer$4,
 };
 const getOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/storages/{storageName}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: ManagedEnvironmentStorage
+            bodyMapper: ManagedEnvironmentStorage,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -17038,21 +17487,21 @@ const getOperationSpec$1 = {
         subscriptionId,
         resourceGroupName,
         storageName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$2
+    serializer: serializer$4,
 };
 const createOrUpdateOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/storages/{storageName}",
     httpMethod: "PUT",
     responses: {
         200: {
-            bodyMapper: ManagedEnvironmentStorage
+            bodyMapper: ManagedEnvironmentStorage,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: storageEnvelope1,
     queryParameters: [apiVersion],
@@ -17061,11 +17510,11 @@ const createOrUpdateOperationSpec$1 = {
         subscriptionId,
         resourceGroupName,
         storageName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$2
+    serializer: serializer$4,
 };
 const deleteOperationSpec$1 = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/storages/{storageName}",
@@ -17074,8 +17523,8 @@ const deleteOperationSpec$1 = {
         200: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -17083,10 +17532,10 @@ const deleteOperationSpec$1 = {
         subscriptionId,
         resourceGroupName,
         storageName,
-        environmentName
+        environmentName,
     ],
     headerParameters: [accept],
-    serializer: serializer$2
+    serializer: serializer$4,
 };
 
 /*
@@ -17126,7 +17575,7 @@ class ContainerAppsSourceControlsImpl {
                     throw new Error("maxPageSize is not supported by this operation.");
                 }
                 return this.listByContainerAppPagingPage(resourceGroupName, containerAppName, options, settings);
-            }
+            },
         };
     }
     listByContainerAppPagingPage(resourceGroupName, containerAppName, options, settings) {
@@ -17153,16 +17602,11 @@ class ContainerAppsSourceControlsImpl {
         return tslib.__asyncGenerator(this, arguments, function* listByContainerAppPagingAll_1() {
             var _a, e_1, _b, _c;
             try {
-                for (var _d = true, _e = tslib.__asyncValues(this.listByContainerAppPagingPage(resourceGroupName, containerAppName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a;) {
+                for (var _d = true, _e = tslib.__asyncValues(this.listByContainerAppPagingPage(resourceGroupName, containerAppName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
                     _c = _f.value;
                     _d = false;
-                    try {
-                        const page = _c;
-                        yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
-                    }
-                    finally {
-                        _d = true;
-                    }
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
                 }
             }
             catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -17221,8 +17665,8 @@ class ContainerAppsSourceControlsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
@@ -17232,13 +17676,13 @@ class ContainerAppsSourceControlsImpl {
                     containerAppName,
                     sourceControlName,
                     sourceControlEnvelope,
-                    options
+                    options,
                 },
-                spec: createOrUpdateOperationSpec
+                spec: createOrUpdateOperationSpec,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
-                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs
+                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
             });
             yield poller.poll();
             return poller;
@@ -17285,18 +17729,18 @@ class ContainerAppsSourceControlsImpl {
                     rawResponse: {
                         statusCode: currentRawResponse.status,
                         body: currentRawResponse.parsedBody,
-                        headers: currentRawResponse.headers.toJSON()
-                    }
+                        headers: currentRawResponse.headers.toJSON(),
+                    },
                 };
             });
             const lro = createLroSpec({
                 sendOperationFn,
                 args: { resourceGroupName, containerAppName, sourceControlName, options },
-                spec: deleteOperationSpec
+                spec: deleteOperationSpec,
             });
             const poller = yield coreLro.createHttpPoller(lro, {
                 restoreFrom: options === null || options === void 0 ? void 0 : options.resumeFrom,
-                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs
+                intervalInMs: options === null || options === void 0 ? void 0 : options.updateIntervalInMs,
             });
             yield poller.poll();
             return poller;
@@ -17327,38 +17771,17 @@ class ContainerAppsSourceControlsImpl {
     }
 }
 // Operation Specifications
-const serializer$1 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const serializer$3 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
 const listByContainerAppOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/sourcecontrols",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: SourceControlCollection
+            bodyMapper: SourceControlCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
-    },
-    queryParameters: [apiVersion],
-    urlParameters: [
-        $host,
-        subscriptionId,
-        resourceGroupName,
-        containerAppName
-    ],
-    headerParameters: [accept],
-    serializer: serializer$1
-};
-const getOperationSpec = {
-    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/sourcecontrols/{sourceControlName}",
-    httpMethod: "GET",
-    responses: {
-        200: {
-            bodyMapper: SourceControl
+            bodyMapper: DefaultErrorResponse,
         },
-        default: {
-            bodyMapper: DefaultErrorResponse
-        }
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -17366,30 +17789,51 @@ const getOperationSpec = {
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        sourceControlName
     ],
     headerParameters: [accept],
-    serializer: serializer$1
+    serializer: serializer$3,
+};
+const getOperationSpec = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/sourcecontrols/{sourceControlName}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: SourceControl,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        containerAppName,
+        sourceControlName,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$3,
 };
 const createOrUpdateOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/sourcecontrols/{sourceControlName}",
     httpMethod: "PUT",
     responses: {
         200: {
-            bodyMapper: SourceControl
+            bodyMapper: SourceControl,
         },
         201: {
-            bodyMapper: SourceControl
+            bodyMapper: SourceControl,
         },
         202: {
-            bodyMapper: SourceControl
+            bodyMapper: SourceControl,
         },
         204: {
-            bodyMapper: SourceControl
+            bodyMapper: SourceControl,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     requestBody: sourceControlEnvelope,
     queryParameters: [apiVersion],
@@ -17398,11 +17842,11 @@ const createOrUpdateOperationSpec = {
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        sourceControlName
+        sourceControlName,
     ],
     headerParameters: [accept, contentType],
     mediaType: "json",
-    serializer: serializer$1
+    serializer: serializer$3,
 };
 const deleteOperationSpec = {
     path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/containerApps/{containerAppName}/sourcecontrols/{sourceControlName}",
@@ -17413,8 +17857,8 @@ const deleteOperationSpec = {
         202: {},
         204: {},
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -17422,31 +17866,318 @@ const deleteOperationSpec = {
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        sourceControlName
+        sourceControlName,
     ],
     headerParameters: [accept],
-    serializer: serializer$1
+    serializer: serializer$3,
 };
 const listByContainerAppNextOperationSpec = {
     path: "{nextLink}",
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: SourceControlCollection
+            bodyMapper: SourceControlCollection,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     urlParameters: [
         $host,
         subscriptionId,
         resourceGroupName,
         containerAppName,
-        nextLink
+        nextLink,
     ],
     headerParameters: [accept],
-    serializer: serializer$1
+    serializer: serializer$3,
+};
+
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT License.
+ *
+ * Code generated by Microsoft (R) AutoRest Code Generator.
+ * Changes may cause incorrect behavior and will be lost if the code is regenerated.
+ */
+/// <reference lib="esnext.asynciterable" />
+/** Class containing Usages operations. */
+class UsagesImpl {
+    /**
+     * Initialize a new instance of the class Usages class.
+     * @param client Reference to the service client
+     */
+    constructor(client) {
+        this.client = client;
+    }
+    /**
+     * Gets, for the specified location, the current resource usage information as well as the limits under
+     * the subscription.
+     * @param location The location for which resource usage is queried.
+     * @param options The options parameters.
+     */
+    list(location, options) {
+        const iter = this.listPagingAll(location, options);
+        return {
+            next() {
+                return iter.next();
+            },
+            [Symbol.asyncIterator]() {
+                return this;
+            },
+            byPage: (settings) => {
+                if (settings === null || settings === void 0 ? void 0 : settings.maxPageSize) {
+                    throw new Error("maxPageSize is not supported by this operation.");
+                }
+                return this.listPagingPage(location, options, settings);
+            },
+        };
+    }
+    listPagingPage(location, options, settings) {
+        return tslib.__asyncGenerator(this, arguments, function* listPagingPage_1() {
+            let result;
+            let continuationToken = settings === null || settings === void 0 ? void 0 : settings.continuationToken;
+            if (!continuationToken) {
+                result = yield tslib.__await(this._list(location, options));
+                let page = result.value || [];
+                continuationToken = result.nextLink;
+                setContinuationToken(page, continuationToken);
+                yield yield tslib.__await(page);
+            }
+            while (continuationToken) {
+                result = yield tslib.__await(this._listNext(location, continuationToken, options));
+                continuationToken = result.nextLink;
+                let page = result.value || [];
+                setContinuationToken(page, continuationToken);
+                yield yield tslib.__await(page);
+            }
+        });
+    }
+    listPagingAll(location, options) {
+        return tslib.__asyncGenerator(this, arguments, function* listPagingAll_1() {
+            var _a, e_1, _b, _c;
+            try {
+                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(location, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
+                    _c = _f.value;
+                    _d = false;
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
+                }
+            }
+            catch (e_1_1) { e_1 = { error: e_1_1 }; }
+            finally {
+                try {
+                    if (!_d && !_a && (_b = _e.return)) yield tslib.__await(_b.call(_e));
+                }
+                finally { if (e_1) throw e_1.error; }
+            }
+        });
+    }
+    /**
+     * Gets, for the specified location, the current resource usage information as well as the limits under
+     * the subscription.
+     * @param location The location for which resource usage is queried.
+     * @param options The options parameters.
+     */
+    _list(location, options) {
+        return this.client.sendOperationRequest({ location, options }, listOperationSpec$1);
+    }
+    /**
+     * ListNext
+     * @param location The location for which resource usage is queried.
+     * @param nextLink The nextLink from the previous successful call to the List method.
+     * @param options The options parameters.
+     */
+    _listNext(location, nextLink, options) {
+        return this.client.sendOperationRequest({ location, nextLink, options }, listNextOperationSpec$1);
+    }
+}
+// Operation Specifications
+const serializer$2 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const listOperationSpec$1 = {
+    path: "/subscriptions/{subscriptionId}/providers/Microsoft.App/locations/{location}/usages",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: ListUsagesResult,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        location1,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$2,
+};
+const listNextOperationSpec$1 = {
+    path: "{nextLink}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: ListUsagesResult,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    urlParameters: [
+        $host,
+        subscriptionId,
+        nextLink,
+        location1,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$2,
+};
+
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT License.
+ *
+ * Code generated by Microsoft (R) AutoRest Code Generator.
+ * Changes may cause incorrect behavior and will be lost if the code is regenerated.
+ */
+/// <reference lib="esnext.asynciterable" />
+/** Class containing ManagedEnvironmentUsages operations. */
+class ManagedEnvironmentUsagesImpl {
+    /**
+     * Initialize a new instance of the class ManagedEnvironmentUsages class.
+     * @param client Reference to the service client
+     */
+    constructor(client) {
+        this.client = client;
+    }
+    /**
+     * Gets the current usage information as well as the limits for environment.
+     * @param resourceGroupName The name of the resource group. The name is case insensitive.
+     * @param environmentName Name of the Environment.
+     * @param options The options parameters.
+     */
+    list(resourceGroupName, environmentName, options) {
+        const iter = this.listPagingAll(resourceGroupName, environmentName, options);
+        return {
+            next() {
+                return iter.next();
+            },
+            [Symbol.asyncIterator]() {
+                return this;
+            },
+            byPage: (settings) => {
+                if (settings === null || settings === void 0 ? void 0 : settings.maxPageSize) {
+                    throw new Error("maxPageSize is not supported by this operation.");
+                }
+                return this.listPagingPage(resourceGroupName, environmentName, options, settings);
+            },
+        };
+    }
+    listPagingPage(resourceGroupName, environmentName, options, settings) {
+        return tslib.__asyncGenerator(this, arguments, function* listPagingPage_1() {
+            let result;
+            let continuationToken = settings === null || settings === void 0 ? void 0 : settings.continuationToken;
+            if (!continuationToken) {
+                result = yield tslib.__await(this._list(resourceGroupName, environmentName, options));
+                let page = result.value || [];
+                continuationToken = result.nextLink;
+                setContinuationToken(page, continuationToken);
+                yield yield tslib.__await(page);
+            }
+            while (continuationToken) {
+                result = yield tslib.__await(this._listNext(resourceGroupName, environmentName, continuationToken, options));
+                continuationToken = result.nextLink;
+                let page = result.value || [];
+                setContinuationToken(page, continuationToken);
+                yield yield tslib.__await(page);
+            }
+        });
+    }
+    listPagingAll(resourceGroupName, environmentName, options) {
+        return tslib.__asyncGenerator(this, arguments, function* listPagingAll_1() {
+            var _a, e_1, _b, _c;
+            try {
+                for (var _d = true, _e = tslib.__asyncValues(this.listPagingPage(resourceGroupName, environmentName, options)), _f; _f = yield tslib.__await(_e.next()), _a = _f.done, !_a; _d = true) {
+                    _c = _f.value;
+                    _d = false;
+                    const page = _c;
+                    yield tslib.__await(yield* tslib.__asyncDelegator(tslib.__asyncValues(page)));
+                }
+            }
+            catch (e_1_1) { e_1 = { error: e_1_1 }; }
+            finally {
+                try {
+                    if (!_d && !_a && (_b = _e.return)) yield tslib.__await(_b.call(_e));
+                }
+                finally { if (e_1) throw e_1.error; }
+            }
+        });
+    }
+    /**
+     * Gets the current usage information as well as the limits for environment.
+     * @param resourceGroupName The name of the resource group. The name is case insensitive.
+     * @param environmentName Name of the Environment.
+     * @param options The options parameters.
+     */
+    _list(resourceGroupName, environmentName, options) {
+        return this.client.sendOperationRequest({ resourceGroupName, environmentName, options }, listOperationSpec);
+    }
+    /**
+     * ListNext
+     * @param resourceGroupName The name of the resource group. The name is case insensitive.
+     * @param environmentName Name of the Environment.
+     * @param nextLink The nextLink from the previous successful call to the List method.
+     * @param options The options parameters.
+     */
+    _listNext(resourceGroupName, environmentName, nextLink, options) {
+        return this.client.sendOperationRequest({ resourceGroupName, environmentName, nextLink, options }, listNextOperationSpec);
+    }
+}
+// Operation Specifications
+const serializer$1 = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
+const listOperationSpec = {
+    path: "/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.App/managedEnvironments/{environmentName}/usages",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: ListUsagesResult,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        environmentName1,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$1,
+};
+const listNextOperationSpec = {
+    path: "{nextLink}",
+    httpMethod: "GET",
+    responses: {
+        200: {
+            bodyMapper: ListUsagesResult,
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    urlParameters: [
+        $host,
+        subscriptionId,
+        resourceGroupName,
+        nextLink,
+        environmentName1,
+    ],
+    headerParameters: [accept],
+    serializer: serializer$1,
 };
 
 /*
@@ -17477,14 +18208,14 @@ class ContainerAppsAPIClient extends coreClient__namespace.ServiceClient {
         }
         const defaults = {
             requestContentType: "application/json; charset=utf-8",
-            credential: credentials
+            credential: credentials,
         };
-        const packageDetails = `azsdk-js-arm-appcontainers/2.0.0`;
+        const packageDetails = `azsdk-js-arm-appcontainers/2.1.0`;
         const userAgentPrefix = options.userAgentOptions && options.userAgentOptions.userAgentPrefix
             ? `${options.userAgentOptions.userAgentPrefix} ${packageDetails}`
             : `${packageDetails}`;
         const optionsWithDefaults = Object.assign(Object.assign(Object.assign({}, defaults), options), { userAgentOptions: {
-                userAgentPrefix
+                userAgentPrefix,
             }, endpoint: (_b = (_a = options.endpoint) !== null && _a !== void 0 ? _a : options.baseUri) !== null && _b !== void 0 ? _b : "https://management.azure.com" });
         super(optionsWithDefaults);
         let bearerTokenAuthenticationPolicyFound = false;
@@ -17498,36 +18229,39 @@ class ContainerAppsAPIClient extends coreClient__namespace.ServiceClient {
             options.pipeline.getOrderedPolicies().length == 0 ||
             !bearerTokenAuthenticationPolicyFound) {
             this.pipeline.removePolicy({
-                name: coreRestPipeline__namespace.bearerTokenAuthenticationPolicyName
+                name: coreRestPipeline__namespace.bearerTokenAuthenticationPolicyName,
             });
             this.pipeline.addPolicy(coreRestPipeline__namespace.bearerTokenAuthenticationPolicy({
                 credential: credentials,
                 scopes: (_c = optionsWithDefaults.credentialScopes) !== null && _c !== void 0 ? _c : `${optionsWithDefaults.endpoint}/.default`,
                 challengeCallbacks: {
-                    authorizeRequestOnChallenge: coreClient__namespace.authorizeRequestOnClaimChallenge
-                }
+                    authorizeRequestOnChallenge: coreClient__namespace.authorizeRequestOnClaimChallenge,
+                },
             }));
         }
         // Parameter assignments
         this.subscriptionId = subscriptionId;
         // Assigning values to Constant parameters
         this.$host = options.$host || "https://management.azure.com";
-        this.apiVersion = options.apiVersion || "2023-05-01";
+        this.apiVersion = options.apiVersion || "2024-03-01";
         this.containerAppsAuthConfigs = new ContainerAppsAuthConfigsImpl(this);
         this.availableWorkloadProfiles = new AvailableWorkloadProfilesImpl(this);
         this.billingMeters = new BillingMetersImpl(this);
         this.connectedEnvironments = new ConnectedEnvironmentsImpl(this);
-        this.connectedEnvironmentsCertificates = new ConnectedEnvironmentsCertificatesImpl(this);
-        this.connectedEnvironmentsDaprComponents = new ConnectedEnvironmentsDaprComponentsImpl(this);
+        this.connectedEnvironmentsCertificates =
+            new ConnectedEnvironmentsCertificatesImpl(this);
+        this.connectedEnvironmentsDaprComponents =
+            new ConnectedEnvironmentsDaprComponentsImpl(this);
         this.connectedEnvironmentsStorages = new ConnectedEnvironmentsStoragesImpl(this);
         this.containerApps = new ContainerAppsImpl(this);
         this.containerAppsRevisions = new ContainerAppsRevisionsImpl(this);
         this.containerAppsRevisionReplicas = new ContainerAppsRevisionReplicasImpl(this);
         this.containerAppsDiagnostics = new ContainerAppsDiagnosticsImpl(this);
         this.managedEnvironmentDiagnostics = new ManagedEnvironmentDiagnosticsImpl(this);
-        this.managedEnvironmentsDiagnostics = new ManagedEnvironmentsDiagnosticsImpl(this);
-        this.operations = new OperationsImpl(this);
+        this.managedEnvironmentsDiagnostics =
+            new ManagedEnvironmentsDiagnosticsImpl(this);
         this.jobs = new JobsImpl(this);
+        this.operations = new OperationsImpl(this);
         this.jobsExecutions = new JobsExecutionsImpl(this);
         this.managedEnvironments = new ManagedEnvironmentsImpl(this);
         this.certificates = new CertificatesImpl(this);
@@ -17536,6 +18270,8 @@ class ContainerAppsAPIClient extends coreClient__namespace.ServiceClient {
         this.daprComponents = new DaprComponentsImpl(this);
         this.managedEnvironmentsStorages = new ManagedEnvironmentsStoragesImpl(this);
         this.containerAppsSourceControls = new ContainerAppsSourceControlsImpl(this);
+        this.usages = new UsagesImpl(this);
+        this.managedEnvironmentUsages = new ManagedEnvironmentUsagesImpl(this);
         this.addCustomApiVersionPolicy(options.apiVersion);
     }
     /** A function that adds a policy that sets the api-version (or equivalent) to reflect the library version. */
@@ -17561,7 +18297,7 @@ class ContainerAppsAPIClient extends coreClient__namespace.ServiceClient {
                     }
                     return next(request);
                 });
-            }
+            },
         };
         this.pipeline.addPolicy(apiVersionPolicy);
     }
@@ -17575,6 +18311,13 @@ class ContainerAppsAPIClient extends coreClient__namespace.ServiceClient {
     jobExecution(resourceGroupName, jobName, jobExecutionName, options) {
         return this.sendOperationRequest({ resourceGroupName, jobName, jobExecutionName, options }, jobExecutionOperationSpec);
     }
+    /**
+     * Get the verification id of a subscription used for verifying custom domains
+     * @param options The options parameters.
+     */
+    getCustomDomainVerificationId(options) {
+        return this.sendOperationRequest({ options }, getCustomDomainVerificationIdOperationSpec);
+    }
 }
 // Operation Specifications
 const serializer = coreClient__namespace.createSerializer(Mappers, /* isXml */ false);
@@ -17583,11 +18326,11 @@ const jobExecutionOperationSpec = {
     httpMethod: "GET",
     responses: {
         200: {
-            bodyMapper: JobExecution
+            bodyMapper: JobExecution,
         },
         default: {
-            bodyMapper: DefaultErrorResponse
-        }
+            bodyMapper: DefaultErrorResponse,
+        },
     },
     queryParameters: [apiVersion],
     urlParameters: [
@@ -17595,10 +18338,26 @@ const jobExecutionOperationSpec = {
         subscriptionId,
         resourceGroupName,
         jobName,
-        jobExecutionName
+        jobExecutionName,
     ],
     headerParameters: [accept],
-    serializer
+    serializer,
+};
+const getCustomDomainVerificationIdOperationSpec = {
+    path: "/subscriptions/{subscriptionId}/providers/Microsoft.App/getCustomDomainVerificationId",
+    httpMethod: "POST",
+    responses: {
+        200: {
+            bodyMapper: { type: { name: "String" } },
+        },
+        default: {
+            bodyMapper: DefaultErrorResponse,
+        },
+    },
+    queryParameters: [apiVersion],
+    urlParameters: [$host, subscriptionId],
+    headerParameters: [accept],
+    serializer,
 };
 
 exports.ContainerAppsAPIClient = ContainerAppsAPIClient;
@@ -18316,7 +19075,7 @@ exports.parseProxyResponse = parseProxyResponse;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 
-var logger$r = __nccwpck_require__(9497);
+var logger$m = __nccwpck_require__(9497);
 var coreClient = __nccwpck_require__(7611);
 var coreUtil = __nccwpck_require__(637);
 var coreRestPipeline = __nccwpck_require__(9146);
@@ -18326,13 +19085,12 @@ var fs = __nccwpck_require__(7147);
 var os = __nccwpck_require__(2037);
 var path = __nccwpck_require__(1017);
 var msalCommon = __nccwpck_require__(1985);
-var fs$1 = __nccwpck_require__(7561);
-var https = __nccwpck_require__(5687);
+var open = __nccwpck_require__(5768);
 var promises = __nccwpck_require__(3292);
 var child_process = __nccwpck_require__(2081);
 var crypto = __nccwpck_require__(6113);
-var open = __nccwpck_require__(5768);
-var util = __nccwpck_require__(3837);
+var promises$1 = __nccwpck_require__(3977);
+var node_crypto = __nccwpck_require__(6005);
 
 function _interopNamespaceDefault(e) {
     var n = Object.create(null);
@@ -18359,7 +19117,7 @@ var child_process__namespace = /*#__PURE__*/_interopNamespaceDefault(child_proce
 /**
  * Current version of the `@azure/identity` package.
  */
-const SDK_VERSION = `4.3.0-beta.3`;
+const SDK_VERSION = `4.4.1`;
 /**
  * The default client ID for authentication
  * @internal
@@ -18442,9 +19200,6 @@ const msalNodeFlowCacheControl = {
  * @internal
  */
 let nativeBrokerInfo = undefined;
-function hasNativeBroker() {
-    return nativeBrokerInfo !== undefined;
-}
 /**
  * An object that allows setting the native broker provider.
  * @internal
@@ -18512,7 +19267,7 @@ const msalPlugins = {
 /**
  * The AzureLogger used for all clients within the identity package
  */
-const logger$q = logger$r.createClientLogger("identity");
+const logger$l = logger$m.createClientLogger("identity");
 /**
  * Separates a list of environment variable names into a plain object with two arrays: an array of missing environment variables and another array with assigned environment variables.
  * @param supportedEnvVars - List of environment variable names
@@ -18552,7 +19307,7 @@ function formatError(scope, error) {
  *   `[title] => [message]`
  *
  */
-function credentialLoggerInstance(title, parent, log = logger$q) {
+function credentialLoggerInstance(title, parent, log = logger$l) {
     const fullTitle = parent ? `${parent.fullTitle} ${title}` : title;
     function info(message) {
         log.info(`${fullTitle} =>`, message);
@@ -18585,7 +19340,7 @@ function credentialLoggerInstance(title, parent, log = logger$q) {
  *   `[title] => getToken() => [message]`
  *
  */
-function credentialLogger(title, log = logger$q) {
+function credentialLogger(title, log = logger$l) {
     const credLogger = credentialLoggerInstance(title, undefined, log);
     return Object.assign(Object.assign({}, credLogger), { parent: log, getToken: credentialLoggerInstance("=> getToken()", credLogger, log) });
 }
@@ -18813,8 +19568,6 @@ const DefaultScopeSuffix = "/.default";
 const imdsHost = "http://169.254.169.254";
 const imdsEndpointPath = "/metadata/identity/oauth2/token";
 const imdsApiVersion = "2018-02-01";
-const azureArcAPIVersion = "2019-11-01";
-const azureFabricVersion = "2019-07-01-preview";
 
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
@@ -18906,14 +19659,19 @@ class IdentityClient extends coreClient.ServiceClient {
             } }, options), { userAgentOptions: {
                 userAgentPrefix,
             }, baseUri }));
+        this.allowInsecureConnection = false;
         this.authorityHost = baseUri;
         this.abortControllers = new Map();
         this.allowLoggingAccountIdentifiers = (_b = options === null || options === void 0 ? void 0 : options.loggingOptions) === null || _b === void 0 ? void 0 : _b.allowLoggingAccountIdentifiers;
         // used for WorkloadIdentity
         this.tokenCredentialOptions = Object.assign({}, options);
+        // used for ManagedIdentity
+        if (options === null || options === void 0 ? void 0 : options.allowInsecureConnection) {
+            this.allowInsecureConnection = options.allowInsecureConnection;
+        }
     }
     async sendTokenRequest(request) {
-        logger$q.info(`IdentityClient: sending token request to [${request.url}]`);
+        logger$l.info(`IdentityClient: sending token request to [${request.url}]`);
         const response = await this.sendRequest(request);
         if (response.bodyAsText && (response.status === 200 || response.status === 201)) {
             const parsedBody = JSON.parse(response.bodyAsText);
@@ -18928,12 +19686,12 @@ class IdentityClient extends coreClient.ServiceClient {
                 },
                 refreshToken: parsedBody.refresh_token,
             };
-            logger$q.info(`IdentityClient: [${request.url}] token acquired, expires on ${token.accessToken.expiresOnTimestamp}`);
+            logger$l.info(`IdentityClient: [${request.url}] token acquired, expires on ${token.accessToken.expiresOnTimestamp}`);
             return token;
         }
         else {
             const error = new AuthenticationError(response.status, response.bodyAsText);
-            logger$q.warning(`IdentityClient: authentication error. HTTP status: ${response.status}, ${error.errorResponse.errorDescription}`);
+            logger$l.warning(`IdentityClient: authentication error. HTTP status: ${response.status}, ${error.errorResponse.errorDescription}`);
             throw error;
         }
     }
@@ -18941,7 +19699,7 @@ class IdentityClient extends coreClient.ServiceClient {
         if (refreshToken === undefined) {
             return null;
         }
-        logger$q.info(`IdentityClient: refreshing access token with client ID: ${clientId}, scopes: ${scopes} started`);
+        logger$l.info(`IdentityClient: refreshing access token with client ID: ${clientId}, scopes: ${scopes} started`);
         const refreshParams = {
             grant_type: "refresh_token",
             client_id: clientId,
@@ -18967,7 +19725,7 @@ class IdentityClient extends coreClient.ServiceClient {
                     tracingOptions: updatedOptions.tracingOptions,
                 });
                 const response = await this.sendTokenRequest(request);
-                logger$q.info(`IdentityClient: refreshed token for client ID: ${clientId}`);
+                logger$l.info(`IdentityClient: refreshed token for client ID: ${clientId}`);
                 return response;
             }
             catch (err) {
@@ -18976,11 +19734,11 @@ class IdentityClient extends coreClient.ServiceClient {
                     // It's likely that the refresh token has expired, so
                     // return null so that the credential implementation will
                     // initiate the authentication flow again.
-                    logger$q.info(`IdentityClient: interaction required for client ID: ${clientId}`);
+                    logger$l.info(`IdentityClient: interaction required for client ID: ${clientId}`);
                     return null;
                 }
                 else {
-                    logger$q.warning(`IdentityClient: failed refreshing token for client ID: ${clientId}: ${err}`);
+                    logger$l.warning(`IdentityClient: failed refreshing token for client ID: ${clientId}: ${err}`);
                     throw err;
                 }
             }
@@ -19028,6 +19786,7 @@ class IdentityClient extends coreClient.ServiceClient {
             url,
             method: "GET",
             body: options === null || options === void 0 ? void 0 : options.body,
+            allowInsecureConnection: this.allowInsecureConnection,
             headers: coreRestPipeline.createHttpHeaders(options === null || options === void 0 ? void 0 : options.headers),
             abortSignal: this.generateAbortSignal(noCorrelationId),
         });
@@ -19045,6 +19804,7 @@ class IdentityClient extends coreClient.ServiceClient {
             method: "POST",
             body: options === null || options === void 0 ? void 0 : options.body,
             headers: coreRestPipeline.createHttpHeaders(options === null || options === void 0 ? void 0 : options.headers),
+            allowInsecureConnection: this.allowInsecureConnection,
             // MSAL doesn't send the correlation ID on the get requests.
             abortSignal: this.generateAbortSignal(this.getCorrelationId(options)),
         });
@@ -19089,10 +19849,10 @@ class IdentityClient extends coreClient.ServiceClient {
             }
             const base64Metadata = accessToken.split(".")[1];
             const { appid, upn, tid, oid } = JSON.parse(Buffer.from(base64Metadata, "base64").toString("utf8"));
-            logger$q.info(`[Authenticated account] Client ID: ${appid}. Tenant ID: ${tid}. User Principal Name: ${upn || unavailableUpn}. Object ID (user): ${oid}`);
+            logger$l.info(`[Authenticated account] Client ID: ${appid}. Tenant ID: ${tid}. User Principal Name: ${upn || unavailableUpn}. Object ID (user): ${oid}`);
         }
         catch (e) {
-            logger$q.warning("allowLoggingAccountIdentifiers was set, but we couldn't log the account information. Error:", e.message);
+            logger$l.warning("allowLoggingAccountIdentifiers was set, but we couldn't log the account information. Error:", e.message);
         }
     }
 }
@@ -19101,7 +19861,7 @@ class IdentityClient extends coreClient.ServiceClient {
 // Licensed under the MIT license.
 const CommonTenantId = "common";
 const AzureAccountClientId = "aebc6443-996d-45c2-90f0-388ff96faa56"; // VSC: 'aebc6443-996d-45c2-90f0-388ff96faa56'
-const logger$p = credentialLogger("VisualStudioCodeCredential");
+const logger$k = credentialLogger("VisualStudioCodeCredential");
 let findCredentials = undefined;
 const vsCodeCredentialControl = {
     setVsCodeCredentialFinder(finder) {
@@ -19154,7 +19914,7 @@ function getPropertyFromVSCode(property) {
         }
     }
     catch (e) {
-        logger$p.info(`Failed to load the Visual Studio Code configuration file. Error: ${e.message}`);
+        logger$k.info(`Failed to load the Visual Studio Code configuration file. Error: ${e.message}`);
         return;
     }
 }
@@ -19187,7 +19947,7 @@ class VisualStudioCodeCredential {
         const authorityHost = mapVSCodeAuthorityHosts[this.cloudName];
         this.identityClient = new IdentityClient(Object.assign({ authorityHost }, options));
         if (options && options.tenantId) {
-            checkTenantId(logger$p, options.tenantId);
+            checkTenantId(logger$k, options.tenantId);
             this.tenantId = options.tenantId;
         }
         else {
@@ -19227,7 +19987,7 @@ class VisualStudioCodeCredential {
     async getToken(scopes, options) {
         var _a, _b;
         await this.prepareOnce();
-        const tenantId = processMultiTenantRequest(this.tenantId, options, this.additionallyAllowedTenantIds, logger$p) || this.tenantId;
+        const tenantId = processMultiTenantRequest(this.tenantId, options, this.additionallyAllowedTenantIds, logger$k) || this.tenantId;
         if (findCredentials === undefined) {
             throw new CredentialUnavailableError([
                 "No implementation of `VisualStudioCodeCredential` is available.",
@@ -19241,7 +20001,7 @@ class VisualStudioCodeCredential {
         // Check to make sure the scope we get back is a valid scope
         if (!scopeString.match(/^[0-9a-zA-Z-.:/]+$/)) {
             const error = new Error("Invalid scope was specified by the user or calling client");
-            logger$p.getToken.info(formatError(scopes, error));
+            logger$k.getToken.info(formatError(scopes, error));
             throw error;
         }
         if (scopeString.indexOf("offline_access") < 0) {
@@ -19261,18 +20021,18 @@ class VisualStudioCodeCredential {
         if (refreshToken) {
             const tokenResponse = await this.identityClient.refreshAccessToken(tenantId, AzureAccountClientId, scopeString, refreshToken, undefined);
             if (tokenResponse) {
-                logger$p.getToken.info(formatSuccess(scopes));
+                logger$k.getToken.info(formatSuccess(scopes));
                 return tokenResponse.accessToken;
             }
             else {
                 const error = new CredentialUnavailableError("Could not retrieve the token associated with Visual Studio Code. Have you connected using the 'Azure Account' extension recently? To troubleshoot, visit https://aka.ms/azsdk/js/identity/vscodecredential/troubleshoot.");
-                logger$p.getToken.info(formatError(scopes, error));
+                logger$k.getToken.info(formatError(scopes, error));
                 throw error;
             }
         }
         else {
             const error = new CredentialUnavailableError("Could not retrieve the token associated with Visual Studio Code. Did you connect using the 'Azure Account' extension? To troubleshoot, visit https://aka.ms/azsdk/js/identity/vscodecredential/troubleshoot.");
-            logger$p.getToken.info(formatError(scopes, error));
+            logger$k.getToken.info(formatError(scopes, error));
             throw error;
         }
     }
@@ -19320,438 +20080,6 @@ const pluginContext = {
 function useIdentityPlugin(plugin) {
     plugin(pluginContext);
 }
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
-const msiName$6 = "ManagedIdentityCredential - AppServiceMSI 2017";
-const logger$o = credentialLogger(msiName$6);
-/**
- * Generates the options used on the request for an access token.
- */
-function prepareRequestOptions$5(scopes, clientId) {
-    const resource = mapScopesToResource(scopes);
-    if (!resource) {
-        throw new Error(`${msiName$6}: Multiple scopes are not supported.`);
-    }
-    const queryParameters = {
-        resource,
-        "api-version": "2017-09-01",
-    };
-    if (clientId) {
-        queryParameters.clientid = clientId;
-    }
-    const query = new URLSearchParams(queryParameters);
-    // This error should not bubble up, since we verify that this environment variable is defined in the isAvailable() method defined below.
-    if (!process.env.MSI_ENDPOINT) {
-        throw new Error(`${msiName$6}: Missing environment variable: MSI_ENDPOINT`);
-    }
-    if (!process.env.MSI_SECRET) {
-        throw new Error(`${msiName$6}: Missing environment variable: MSI_SECRET`);
-    }
-    return {
-        url: `${process.env.MSI_ENDPOINT}?${query.toString()}`,
-        method: "GET",
-        headers: coreRestPipeline.createHttpHeaders({
-            Accept: "application/json",
-            secret: process.env.MSI_SECRET,
-        }),
-    };
-}
-/**
- * Defines how to determine whether the Azure App Service MSI is available, and also how to retrieve a token from the Azure App Service MSI.
- */
-const appServiceMsi2017 = {
-    name: "appServiceMsi2017",
-    async isAvailable({ scopes }) {
-        const resource = mapScopesToResource(scopes);
-        if (!resource) {
-            logger$o.info(`${msiName$6}: Unavailable. Multiple scopes are not supported.`);
-            return false;
-        }
-        const env = process.env;
-        const result = Boolean(env.MSI_ENDPOINT && env.MSI_SECRET);
-        if (!result) {
-            logger$o.info(`${msiName$6}: Unavailable. The environment variables needed are: MSI_ENDPOINT and MSI_SECRET.`);
-        }
-        return result;
-    },
-    async getToken(configuration, getTokenOptions = {}) {
-        const { identityClient, scopes, clientId, resourceId } = configuration;
-        if (resourceId) {
-            logger$o.warning(`${msiName$6}: managed Identity by resource Id is not supported. Argument resourceId might be ignored by the service.`);
-        }
-        logger$o.info(`${msiName$6}: Using the endpoint and the secret coming form the environment variables: MSI_ENDPOINT=${process.env.MSI_ENDPOINT} and MSI_SECRET=[REDACTED].`);
-        const request = coreRestPipeline.createPipelineRequest(Object.assign(Object.assign({ abortSignal: getTokenOptions.abortSignal }, prepareRequestOptions$5(scopes, clientId)), { 
-            // Generally, MSI endpoints use the HTTP protocol, without transport layer security (TLS).
-            allowInsecureConnection: true }));
-        const tokenResponse = await identityClient.sendTokenRequest(request);
-        return (tokenResponse && tokenResponse.accessToken) || null;
-    },
-};
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
-const msiName$5 = "ManagedIdentityCredential - AppServiceMSI 2019";
-const logger$n = credentialLogger(msiName$5);
-/**
- * Generates the options used on the request for an access token.
- */
-function prepareRequestOptions$4(scopes, clientId, resourceId) {
-    const resource = mapScopesToResource(scopes);
-    if (!resource) {
-        throw new Error(`${msiName$5}: Multiple scopes are not supported.`);
-    }
-    const queryParameters = {
-        resource,
-        "api-version": "2019-08-01",
-    };
-    if (clientId) {
-        queryParameters.client_id = clientId;
-    }
-    if (resourceId) {
-        queryParameters.mi_res_id = resourceId;
-    }
-    const query = new URLSearchParams(queryParameters);
-    // This error should not bubble up, since we verify that this environment variable is defined in the isAvailable() method defined below.
-    if (!process.env.IDENTITY_ENDPOINT) {
-        throw new Error(`${msiName$5}: Missing environment variable: IDENTITY_ENDPOINT`);
-    }
-    if (!process.env.IDENTITY_HEADER) {
-        throw new Error(`${msiName$5}: Missing environment variable: IDENTITY_HEADER`);
-    }
-    return {
-        url: `${process.env.IDENTITY_ENDPOINT}?${query.toString()}`,
-        method: "GET",
-        headers: coreRestPipeline.createHttpHeaders({
-            Accept: "application/json",
-            "X-IDENTITY-HEADER": process.env.IDENTITY_HEADER,
-        }),
-    };
-}
-/**
- * Defines how to determine whether the Azure App Service MSI is available, and also how to retrieve a token from the Azure App Service MSI.
- */
-const appServiceMsi2019 = {
-    name: "appServiceMsi2019",
-    async isAvailable({ scopes }) {
-        const resource = mapScopesToResource(scopes);
-        if (!resource) {
-            logger$n.info(`${msiName$5}: Unavailable. Multiple scopes are not supported.`);
-            return false;
-        }
-        const env = process.env;
-        const result = Boolean(env.IDENTITY_ENDPOINT && env.IDENTITY_HEADER);
-        if (!result) {
-            logger$n.info(`${msiName$5}: Unavailable. The environment variables needed are: IDENTITY_ENDPOINT and IDENTITY_HEADER.`);
-        }
-        return result;
-    },
-    async getToken(configuration, getTokenOptions = {}) {
-        const { identityClient, scopes, clientId, resourceId } = configuration;
-        logger$n.info(`${msiName$5}: Using the endpoint and the secret coming form the environment variables: IDENTITY_ENDPOINT=${process.env.IDENTITY_ENDPOINT} and IDENTITY_HEADER=[REDACTED].`);
-        const request = coreRestPipeline.createPipelineRequest(Object.assign(Object.assign({ abortSignal: getTokenOptions.abortSignal }, prepareRequestOptions$4(scopes, clientId, resourceId)), { 
-            // Generally, MSI endpoints use the HTTP protocol, without transport layer security (TLS).
-            allowInsecureConnection: true }));
-        const tokenResponse = await identityClient.sendTokenRequest(request);
-        return (tokenResponse && tokenResponse.accessToken) || null;
-    },
-};
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
-const msiName$4 = "ManagedIdentityCredential - Azure Arc MSI";
-const logger$m = credentialLogger(msiName$4);
-/**
- * Generates the options used on the request for an access token.
- */
-function prepareRequestOptions$3(scopes, clientId, resourceId) {
-    const resource = mapScopesToResource(scopes);
-    if (!resource) {
-        throw new Error(`${msiName$4}: Multiple scopes are not supported.`);
-    }
-    const queryParameters = {
-        resource,
-        "api-version": azureArcAPIVersion,
-    };
-    if (clientId) {
-        queryParameters.client_id = clientId;
-    }
-    if (resourceId) {
-        queryParameters.msi_res_id = resourceId;
-    }
-    // This error should not bubble up, since we verify that this environment variable is defined in the isAvailable() method defined below.
-    if (!process.env.IDENTITY_ENDPOINT) {
-        throw new Error(`${msiName$4}: Missing environment variable: IDENTITY_ENDPOINT`);
-    }
-    const query = new URLSearchParams(queryParameters);
-    return coreRestPipeline.createPipelineRequest({
-        // Should be similar to: http://localhost:40342/metadata/identity/oauth2/token
-        url: `${process.env.IDENTITY_ENDPOINT}?${query.toString()}`,
-        method: "GET",
-        headers: coreRestPipeline.createHttpHeaders({
-            Accept: "application/json",
-            Metadata: "true",
-        }),
-    });
-}
-/**
- * Does a request to the authentication provider that results in a file path.
- */
-async function filePathRequest(identityClient, requestPrepareOptions) {
-    const response = await identityClient.sendRequest(coreRestPipeline.createPipelineRequest(requestPrepareOptions));
-    if (response.status !== 401) {
-        let message = "";
-        if (response.bodyAsText) {
-            message = ` Response: ${response.bodyAsText}`;
-        }
-        throw new AuthenticationError(response.status, `${msiName$4}: To authenticate with Azure Arc MSI, status code 401 is expected on the first request. ${message}`);
-    }
-    const authHeader = response.headers.get("www-authenticate") || "";
-    try {
-        return authHeader.split("=").slice(1)[0];
-    }
-    catch (e) {
-        throw Error(`Invalid www-authenticate header format: ${authHeader}`);
-    }
-}
-function platformToFilePath() {
-    switch (process.platform) {
-        case "win32":
-            if (!process.env.PROGRAMDATA) {
-                throw new Error(`${msiName$4}: PROGRAMDATA environment variable has no value.`);
-            }
-            return `${process.env.PROGRAMDATA}\\AzureConnectedMachineAgent\\Tokens`;
-        case "linux":
-            return "/var/opt/azcmagent/tokens";
-        default:
-            throw new Error(`${msiName$4}: Unsupported platform ${process.platform}.`);
-    }
-}
-/**
- * Validates that a given Azure Arc MSI file path is valid for use.
- *
- * A valid file will:
- * 1. Be in the expected path for the current platform.
- * 2. Have a `.key` extension.
- * 3. Be at most 4096 bytes in size.
- */
-function validateKeyFile(filePath) {
-    if (!filePath) {
-        throw new Error(`${msiName$4}: Failed to find the token file.`);
-    }
-    if (!filePath.endsWith(".key")) {
-        throw new Error(`${msiName$4}: unexpected file path from HIMDS service: ${filePath}.`);
-    }
-    const expectedPath = platformToFilePath();
-    if (!filePath.startsWith(expectedPath)) {
-        throw new Error(`${msiName$4}: unexpected file path from HIMDS service: ${filePath}.`);
-    }
-    const stats = fs$1.statSync(filePath);
-    if (stats.size > 4096) {
-        throw new Error(`${msiName$4}: The file at ${filePath} is larger than expected at ${stats.size} bytes.`);
-    }
-}
-/**
- * Defines how to determine whether the Azure Arc MSI is available, and also how to retrieve a token from the Azure Arc MSI.
- */
-const arcMsi = {
-    name: "arc",
-    async isAvailable({ scopes }) {
-        const resource = mapScopesToResource(scopes);
-        if (!resource) {
-            logger$m.info(`${msiName$4}: Unavailable. Multiple scopes are not supported.`);
-            return false;
-        }
-        const result = Boolean(process.env.IMDS_ENDPOINT && process.env.IDENTITY_ENDPOINT);
-        if (!result) {
-            logger$m.info(`${msiName$4}: The environment variables needed are: IMDS_ENDPOINT and IDENTITY_ENDPOINT`);
-        }
-        return result;
-    },
-    async getToken(configuration, getTokenOptions = {}) {
-        var _a;
-        const { identityClient, scopes, clientId, resourceId } = configuration;
-        if (clientId) {
-            logger$m.warning(`${msiName$4}: user-assigned identities not supported. The argument clientId might be ignored by the service.`);
-        }
-        if (resourceId) {
-            logger$m.warning(`${msiName$4}: user defined managed Identity by resource Id is not supported. Argument resourceId will be ignored.`);
-        }
-        logger$m.info(`${msiName$4}: Authenticating.`);
-        const requestOptions = Object.assign(Object.assign({ disableJsonStringifyOnBody: true, deserializationMapper: undefined, abortSignal: getTokenOptions.abortSignal }, prepareRequestOptions$3(scopes, clientId, resourceId)), { allowInsecureConnection: true });
-        const filePath = await filePathRequest(identityClient, requestOptions);
-        validateKeyFile(filePath);
-        const key = await fs$1.promises.readFile(filePath, { encoding: "utf-8" });
-        (_a = requestOptions.headers) === null || _a === void 0 ? void 0 : _a.set("Authorization", `Basic ${key}`);
-        const request = coreRestPipeline.createPipelineRequest(Object.assign(Object.assign({}, requestOptions), { 
-            // Generally, MSI endpoints use the HTTP protocol, without transport layer security (TLS).
-            allowInsecureConnection: true }));
-        const tokenResponse = await identityClient.sendTokenRequest(request);
-        return (tokenResponse && tokenResponse.accessToken) || null;
-    },
-};
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
-const msiName$3 = "ManagedIdentityCredential - CloudShellMSI";
-const logger$l = credentialLogger(msiName$3);
-/**
- * Generates the options used on the request for an access token.
- */
-function prepareRequestOptions$2(scopes, clientId, resourceId) {
-    const resource = mapScopesToResource(scopes);
-    if (!resource) {
-        throw new Error(`${msiName$3}: Multiple scopes are not supported.`);
-    }
-    const body = {
-        resource,
-    };
-    if (clientId) {
-        body.client_id = clientId;
-    }
-    if (resourceId) {
-        body.msi_res_id = resourceId;
-    }
-    // This error should not bubble up, since we verify that this environment variable is defined in the isAvailable() method defined below.
-    if (!process.env.MSI_ENDPOINT) {
-        throw new Error(`${msiName$3}: Missing environment variable: MSI_ENDPOINT`);
-    }
-    const params = new URLSearchParams(body);
-    return {
-        url: process.env.MSI_ENDPOINT,
-        method: "POST",
-        body: params.toString(),
-        headers: coreRestPipeline.createHttpHeaders({
-            Accept: "application/json",
-            Metadata: "true",
-            "Content-Type": "application/x-www-form-urlencoded",
-        }),
-    };
-}
-/**
- * Defines how to determine whether the Azure Cloud Shell MSI is available, and also how to retrieve a token from the Azure Cloud Shell MSI.
- * Since Azure Managed Identities aren't available in the Azure Cloud Shell, we log a warning for users that try to access cloud shell using user assigned identity.
- */
-const cloudShellMsi = {
-    name: "cloudShellMsi",
-    async isAvailable({ scopes }) {
-        const resource = mapScopesToResource(scopes);
-        if (!resource) {
-            logger$l.info(`${msiName$3}: Unavailable. Multiple scopes are not supported.`);
-            return false;
-        }
-        const result = Boolean(process.env.MSI_ENDPOINT);
-        if (!result) {
-            logger$l.info(`${msiName$3}: Unavailable. The environment variable MSI_ENDPOINT is needed.`);
-        }
-        return result;
-    },
-    async getToken(configuration, getTokenOptions = {}) {
-        const { identityClient, scopes, clientId, resourceId } = configuration;
-        if (clientId) {
-            logger$l.warning(`${msiName$3}: user-assigned identities not supported. The argument clientId might be ignored by the service.`);
-        }
-        if (resourceId) {
-            logger$l.warning(`${msiName$3}: user defined managed Identity by resource Id not supported. The argument resourceId might be ignored by the service.`);
-        }
-        logger$l.info(`${msiName$3}: Using the endpoint coming form the environment variable MSI_ENDPOINT = ${process.env.MSI_ENDPOINT}.`);
-        const request = coreRestPipeline.createPipelineRequest(Object.assign(Object.assign({ abortSignal: getTokenOptions.abortSignal }, prepareRequestOptions$2(scopes, clientId, resourceId)), { 
-            // Generally, MSI endpoints use the HTTP protocol, without transport layer security (TLS).
-            allowInsecureConnection: true }));
-        const tokenResponse = await identityClient.sendTokenRequest(request);
-        return (tokenResponse && tokenResponse.accessToken) || null;
-    },
-};
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
-// This MSI can be easily tested by deploying a container to Azure Service Fabric with the Dockerfile:
-//
-//   FROM node:12
-//   RUN wget https://host.any/path/bash.sh
-//   CMD ["bash", "bash.sh"]
-//
-// Where the bash script contains:
-//
-//   curl --insecure $IDENTITY_ENDPOINT'?api-version=2019-07-01-preview&resource=https://vault.azure.net/' -H "Secret: $IDENTITY_HEADER"
-//
-const msiName$2 = "ManagedIdentityCredential - Fabric MSI";
-const logger$k = credentialLogger(msiName$2);
-/**
- * Generates the options used on the request for an access token.
- */
-function prepareRequestOptions$1(scopes, clientId, resourceId) {
-    const resource = mapScopesToResource(scopes);
-    if (!resource) {
-        throw new Error(`${msiName$2}: Multiple scopes are not supported.`);
-    }
-    const queryParameters = {
-        resource,
-        "api-version": azureFabricVersion,
-    };
-    if (clientId) {
-        queryParameters.client_id = clientId;
-    }
-    if (resourceId) {
-        queryParameters.msi_res_id = resourceId;
-    }
-    const query = new URLSearchParams(queryParameters);
-    // This error should not bubble up, since we verify that this environment variable is defined in the isAvailable() method defined below.
-    if (!process.env.IDENTITY_ENDPOINT) {
-        throw new Error("Missing environment variable: IDENTITY_ENDPOINT");
-    }
-    if (!process.env.IDENTITY_HEADER) {
-        throw new Error("Missing environment variable: IDENTITY_HEADER");
-    }
-    return {
-        url: `${process.env.IDENTITY_ENDPOINT}?${query.toString()}`,
-        method: "GET",
-        headers: coreRestPipeline.createHttpHeaders({
-            Accept: "application/json",
-            secret: process.env.IDENTITY_HEADER,
-        }),
-    };
-}
-/**
- * Defines how to determine whether the Azure Service Fabric MSI is available, and also how to retrieve a token from the Azure Service Fabric MSI.
- */
-const fabricMsi = {
-    name: "fabricMsi",
-    async isAvailable({ scopes }) {
-        const resource = mapScopesToResource(scopes);
-        if (!resource) {
-            logger$k.info(`${msiName$2}: Unavailable. Multiple scopes are not supported.`);
-            return false;
-        }
-        const env = process.env;
-        const result = Boolean(env.IDENTITY_ENDPOINT && env.IDENTITY_HEADER && env.IDENTITY_SERVER_THUMBPRINT);
-        if (!result) {
-            logger$k.info(`${msiName$2}: Unavailable. The environment variables needed are: IDENTITY_ENDPOINT, IDENTITY_HEADER and IDENTITY_SERVER_THUMBPRINT`);
-        }
-        return result;
-    },
-    async getToken(configuration, getTokenOptions = {}) {
-        const { scopes, identityClient, clientId, resourceId } = configuration;
-        if (resourceId) {
-            logger$k.warning(`${msiName$2}: user defined managed Identity by resource Id is not supported. Argument resourceId might be ignored by the service.`);
-        }
-        logger$k.info([
-            `${msiName$2}:`,
-            "Using the endpoint and the secret coming from the environment variables:",
-            `IDENTITY_ENDPOINT=${process.env.IDENTITY_ENDPOINT},`,
-            "IDENTITY_HEADER=[REDACTED] and",
-            "IDENTITY_SERVER_THUMBPRINT=[REDACTED].",
-        ].join(" "));
-        const request = coreRestPipeline.createPipelineRequest(Object.assign({ abortSignal: getTokenOptions.abortSignal }, prepareRequestOptions$1(scopes, clientId, resourceId)));
-        request.agent = new https.Agent({
-            // This is necessary because Service Fabric provides a self-signed certificate.
-            // The alternative path is to verify the certificate using the IDENTITY_SERVER_THUMBPRINT env variable.
-            rejectUnauthorized: false,
-        });
-        const tokenResponse = await identityClient.sendTokenRequest(request);
-        return (tokenResponse && tokenResponse.accessToken) || null;
-    },
-};
 
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
@@ -19859,16 +20187,6 @@ function getMSALLogLevel(logLevel) {
             // default msal logging level should be Info
             return msalCommon__namespace.LogLevel.Info;
     }
-}
-/**
- * Wraps core-util's randomUUID in order to allow for mocking in tests.
- * This prepares the library for the upcoming core-util update to ESM.
- *
- * @internal
- * @returns A string containing a random UUID
- */
-function randomUUID() {
-    return coreUtil.randomUUID();
 }
 /**
  * Handles MSAL errors.
@@ -20104,6 +20422,41 @@ const imdsMsi = {
 
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
+// Matches the default retry configuration in expontentialRetryStrategy.ts
+const DEFAULT_CLIENT_MAX_RETRY_INTERVAL = 1000 * 64;
+/**
+ * An additional policy that retries on 404 errors. The default retry policy does not retry on
+ * 404s, but the IMDS endpoint can return 404s when the token is not yet available. This policy
+ * will retry on 404s with an exponential backoff.
+ *
+ * @param msiRetryConfig - The retry configuration for the MSI credential.
+ * @returns - The policy that will retry on 404s.
+ */
+function imdsRetryPolicy(msiRetryConfig) {
+    return coreRestPipeline.retryPolicy([
+        {
+            name: "imdsRetryPolicy",
+            retry: ({ retryCount, response }) => {
+                if ((response === null || response === void 0 ? void 0 : response.status) !== 404) {
+                    return { skipStrategy: true };
+                }
+                // Exponentially increase the delay each time
+                const exponentialDelay = msiRetryConfig.startDelayInMs * Math.pow(2, retryCount);
+                // Don't let the delay exceed the maximum
+                const clampedExponentialDelay = Math.min(DEFAULT_CLIENT_MAX_RETRY_INTERVAL, exponentialDelay);
+                // Allow the final value to have some "jitter" (within 50% of the delay size) so
+                // that retries across multiple clients don't occur simultaneously.
+                const retryAfterInMs = clampedExponentialDelay / 2 + coreUtil.getRandomIntegerInclusive(0, clampedExponentialDelay / 2);
+                return { retryAfterInMs };
+            },
+        },
+    ], {
+        maxRetries: msiRetryConfig.maxRetries,
+    });
+}
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
 /**
  * Helps specify a regional authority, or "AutoDiscoverRegion" to auto-detect the region.
  */
@@ -20245,6 +20598,16 @@ function calculateRegionalAuthority(regionalAuthority) {
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 /**
+ * A call to open(), but mockable
+ * @internal
+ */
+const interactiveBrowserMockable = {
+    open,
+};
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+/**
  * The default logger used if no logger was passed in by the credential.
  */
 const msalLogger = credentialLogger("MsalClient");
@@ -20272,7 +20635,7 @@ function generateMsalConfiguration(clientId, tenantId, msalClientOptions = {}) {
             networkClient: httpClient,
             loggerOptions: {
                 loggerCallback: defaultLoggerCallback((_c = msalClientOptions.logger) !== null && _c !== void 0 ? _c : msalLogger),
-                logLevel: getMSALLogLevel(logger$r.getLogLevel()),
+                logLevel: getMSALLogLevel(logger$m.getLogLevel()),
                 piiLoggingEnabled: (_d = msalClientOptions.loggingOptions) === null || _d === void 0 ? void 0 : _d.enableUnsafeSupportLogging,
             },
         },
@@ -20373,6 +20736,16 @@ To work with multiple accounts for the same Client ID and Tenant ID, please prov
         return app.acquireTokenSilent(silentRequest);
     }
     /**
+     * Builds an authority URL for the given request. The authority may be different than the one used when creating the MSAL client
+     * if the user is creating cross-tenant requests
+     */
+    function calculateRequestAuthority(options) {
+        if (options === null || options === void 0 ? void 0 : options.tenantId) {
+            return getAuthority(options.tenantId, createMsalClientOptions.authorityHost);
+        }
+        return state.msalConfig.auth.authority;
+    }
+    /**
      * Performs silent authentication using MSAL to acquire an access token.
      * If silent authentication fails, falls back to interactive authentication.
      *
@@ -20425,7 +20798,7 @@ To work with multiple accounts for the same Client ID and Tenant ID, please prov
         try {
             const response = await msalApp.acquireTokenByClientCredential({
                 scopes,
-                authority: state.msalConfig.auth.authority,
+                authority: calculateRequestAuthority(options),
                 azureRegion: calculateRegionalAuthority(),
                 claims: options === null || options === void 0 ? void 0 : options.claims,
             });
@@ -20447,7 +20820,7 @@ To work with multiple accounts for the same Client ID and Tenant ID, please prov
         try {
             const response = await msalApp.acquireTokenByClientCredential({
                 scopes,
-                authority: state.msalConfig.auth.authority,
+                authority: calculateRequestAuthority(options),
                 azureRegion: calculateRegionalAuthority(),
                 claims: options === null || options === void 0 ? void 0 : options.claims,
                 clientAssertion,
@@ -20470,7 +20843,7 @@ To work with multiple accounts for the same Client ID and Tenant ID, please prov
         try {
             const response = await msalApp.acquireTokenByClientCredential({
                 scopes,
-                authority: state.msalConfig.auth.authority,
+                authority: calculateRequestAuthority(options),
                 azureRegion: calculateRegionalAuthority(),
                 claims: options === null || options === void 0 ? void 0 : options.claims,
             });
@@ -20494,7 +20867,7 @@ To work with multiple accounts for the same Client ID and Tenant ID, please prov
                 scopes,
                 cancel: (_b = (_a = options === null || options === void 0 ? void 0 : options.abortSignal) === null || _a === void 0 ? void 0 : _a.aborted) !== null && _b !== void 0 ? _b : false,
                 deviceCodeCallback,
-                authority: state.msalConfig.auth.authority,
+                authority: calculateRequestAuthority(options),
                 claims: options === null || options === void 0 ? void 0 : options.claims,
             };
             const deviceCodeRequest = msalApp.acquireTokenByDeviceCode(requestOptions);
@@ -20514,7 +20887,7 @@ To work with multiple accounts for the same Client ID and Tenant ID, please prov
                 scopes,
                 username,
                 password,
-                authority: state.msalConfig.auth.authority,
+                authority: calculateRequestAuthority(options),
                 claims: options === null || options === void 0 ? void 0 : options.claims,
             };
             return msalApp.acquireTokenByUsernamePassword(requestOptions);
@@ -20543,9 +20916,113 @@ To work with multiple accounts for the same Client ID and Tenant ID, please prov
                 scopes,
                 redirectUri,
                 code: authorizationCode,
-                authority: state.msalConfig.auth.authority,
+                authority: calculateRequestAuthority(options),
                 claims: options === null || options === void 0 ? void 0 : options.claims,
             });
+        });
+    }
+    async function getTokenOnBehalfOf(scopes, userAssertionToken, clientCredentials, options = {}) {
+        msalLogger.getToken.info(`Attempting to acquire token on behalf of another user`);
+        if (typeof clientCredentials === "string") {
+            // Client secret
+            msalLogger.getToken.info(`Using client secret for on behalf of flow`);
+            state.msalConfig.auth.clientSecret = clientCredentials;
+        }
+        else if (typeof clientCredentials === "function") {
+            // Client Assertion
+            msalLogger.getToken.info(`Using client assertion callback for on behalf of flow`);
+            state.msalConfig.auth.clientAssertion = clientCredentials;
+        }
+        else {
+            // Client certificate
+            msalLogger.getToken.info(`Using client certificate for on behalf of flow`);
+            state.msalConfig.auth.clientCertificate = clientCredentials;
+        }
+        const msalApp = await getConfidentialApp(options);
+        try {
+            const response = await msalApp.acquireTokenOnBehalfOf({
+                scopes,
+                authority: calculateRequestAuthority(options),
+                claims: options.claims,
+                oboAssertion: userAssertionToken,
+            });
+            ensureValidMsalToken(scopes, response, options);
+            msalLogger.getToken.info(formatSuccess(scopes));
+            return {
+                token: response.accessToken,
+                expiresOnTimestamp: response.expiresOn.getTime(),
+            };
+        }
+        catch (err) {
+            throw handleMsalError(scopes, err, options);
+        }
+    }
+    async function getTokenByInteractiveRequest(scopes, options = {}) {
+        msalLogger.getToken.info(`Attempting to acquire token interactively`);
+        const app = await getPublicApp(options);
+        /**
+         * A helper function that supports brokered authentication through the MSAL's public application.
+         *
+         * When options.useDefaultBrokerAccount is true, the method will attempt to authenticate using the default broker account.
+         * If the default broker account is not available, the method will fall back to interactive authentication.
+         */
+        async function getBrokeredToken(useDefaultBrokerAccount) {
+            var _a;
+            msalLogger.verbose("Authentication will resume through the broker");
+            const interactiveRequest = createBaseInteractiveRequest();
+            if (state.pluginConfiguration.broker.parentWindowHandle) {
+                interactiveRequest.windowHandle = Buffer.from(state.pluginConfiguration.broker.parentWindowHandle);
+            }
+            else {
+                // this is a bug, as the pluginConfiguration handler should validate this case.
+                msalLogger.warning("Parent window handle is not specified for the broker. This may cause unexpected behavior. Please provide the parentWindowHandle.");
+            }
+            if (state.pluginConfiguration.broker.enableMsaPassthrough) {
+                ((_a = interactiveRequest.tokenQueryParameters) !== null && _a !== void 0 ? _a : (interactiveRequest.tokenQueryParameters = {}))["msal_request_type"] =
+                    "consumer_passthrough";
+            }
+            if (useDefaultBrokerAccount) {
+                interactiveRequest.prompt = "none";
+                msalLogger.verbose("Attempting broker authentication using the default broker account");
+            }
+            else {
+                msalLogger.verbose("Attempting broker authentication without the default broker account");
+            }
+            try {
+                return await app.acquireTokenInteractive(interactiveRequest);
+            }
+            catch (e) {
+                msalLogger.verbose(`Failed to authenticate through the broker: ${e.message}`);
+                // If we tried to use the default broker account and failed, fall back to interactive authentication
+                if (useDefaultBrokerAccount) {
+                    return getBrokeredToken(/* useDefaultBrokerAccount: */ false);
+                }
+                else {
+                    throw e;
+                }
+            }
+        }
+        function createBaseInteractiveRequest() {
+            var _a, _b;
+            return {
+                openBrowser: async (url) => {
+                    await interactiveBrowserMockable.open(url, { wait: true, newInstance: true });
+                },
+                scopes,
+                authority: calculateRequestAuthority(options),
+                claims: options === null || options === void 0 ? void 0 : options.claims,
+                loginHint: options === null || options === void 0 ? void 0 : options.loginHint,
+                errorTemplate: (_a = options === null || options === void 0 ? void 0 : options.browserCustomizationOptions) === null || _a === void 0 ? void 0 : _a.errorMessage,
+                successTemplate: (_b = options === null || options === void 0 ? void 0 : options.browserCustomizationOptions) === null || _b === void 0 ? void 0 : _b.successMessage,
+            };
+        }
+        return withSilentAuthentication(app, scopes, options, async () => {
+            var _a;
+            const interactiveRequest = createBaseInteractiveRequest();
+            if (state.pluginConfiguration.broker.isEnabled) {
+                return getBrokeredToken((_a = state.pluginConfiguration.broker.useDefaultBrokerAccount) !== null && _a !== void 0 ? _a : false);
+            }
+            return app.acquireTokenInteractive(interactiveRequest);
         });
     }
     return {
@@ -20556,6 +21033,8 @@ To work with multiple accounts for the same Client ID and Tenant ID, please prov
         getTokenByDeviceCode,
         getTokenByUsernamePassword,
         getTokenByAuthorizationCode,
+        getTokenOnBehalfOf,
+        getTokenByInteractiveRequest,
     };
 }
 
@@ -20597,9 +21076,8 @@ class ClientAssertionCredential {
     async getToken(scopes, options = {}) {
         return tracingClient.withSpan(`${this.constructor.name}.getToken`, options, async (newOptions) => {
             newOptions.tenantId = processMultiTenantRequest(this.tenantId, newOptions, this.additionallyAllowedTenantIds, logger$h);
-            const clientAssertion = await this.getAssertion();
             const arrayScopes = Array.isArray(scopes) ? scopes : [scopes];
-            return this.msalClient.getTokenByClientAssertion(arrayScopes, clientAssertion, newOptions);
+            return this.msalClient.getTokenByClientAssertion(arrayScopes, this.getAssertion, newOptions);
         });
     }
 }
@@ -20710,32 +21188,211 @@ const logger$f = credentialLogger(msiName);
 /**
  * Defines how to determine whether the token exchange MSI is available, and also how to retrieve a token from the token exchange MSI.
  */
-function tokenExchangeMsi() {
-    return {
-        name: "tokenExchangeMsi",
-        async isAvailable({ clientId }) {
-            const env = process.env;
-            const result = Boolean((clientId || env.AZURE_CLIENT_ID) &&
-                env.AZURE_TENANT_ID &&
-                process.env.AZURE_FEDERATED_TOKEN_FILE);
-            if (!result) {
-                logger$f.info(`${msiName}: Unavailable. The environment variables needed are: AZURE_CLIENT_ID (or the client ID sent through the parameters), AZURE_TENANT_ID and AZURE_FEDERATED_TOKEN_FILE`);
+const tokenExchangeMsi = {
+    name: "tokenExchangeMsi",
+    async isAvailable({ clientId }) {
+        const env = process.env;
+        const result = Boolean((clientId || env.AZURE_CLIENT_ID) &&
+            env.AZURE_TENANT_ID &&
+            process.env.AZURE_FEDERATED_TOKEN_FILE);
+        if (!result) {
+            logger$f.info(`${msiName}: Unavailable. The environment variables needed are: AZURE_CLIENT_ID (or the client ID sent through the parameters), AZURE_TENANT_ID and AZURE_FEDERATED_TOKEN_FILE`);
+        }
+        return result;
+    },
+    async getToken(configuration, getTokenOptions = {}) {
+        const { scopes, clientId } = configuration;
+        const identityClientTokenCredentialOptions = {};
+        const workloadIdentityCredential = new WorkloadIdentityCredential(Object.assign(Object.assign({ clientId, tenantId: process.env.AZURE_TENANT_ID, tokenFilePath: process.env.AZURE_FEDERATED_TOKEN_FILE }, identityClientTokenCredentialOptions), { disableInstanceDiscovery: true }));
+        return workloadIdentityCredential.getToken(scopes, getTokenOptions);
+    },
+};
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+const logger$e = credentialLogger("ManagedIdentityCredential(MSAL)");
+class MsalMsiProvider {
+    constructor(clientIdOrOptions, options = {}) {
+        var _a, _b;
+        this.msiRetryConfig = {
+            maxRetries: 5,
+            startDelayInMs: 800,
+            intervalIncrement: 2,
+        };
+        let _options = {};
+        if (typeof clientIdOrOptions === "string") {
+            this.clientId = clientIdOrOptions;
+            _options = options;
+        }
+        else {
+            this.clientId = clientIdOrOptions === null || clientIdOrOptions === void 0 ? void 0 : clientIdOrOptions.clientId;
+            _options = clientIdOrOptions !== null && clientIdOrOptions !== void 0 ? clientIdOrOptions : {};
+        }
+        this.resourceId = _options === null || _options === void 0 ? void 0 : _options.resourceId;
+        // For JavaScript users.
+        if (this.clientId && this.resourceId) {
+            throw new Error(`ManagedIdentityCredential - Client Id and Resource Id can't be provided at the same time.`);
+        }
+        // ManagedIdentity uses http for local requests
+        _options.allowInsecureConnection = true;
+        if (((_a = _options === null || _options === void 0 ? void 0 : _options.retryOptions) === null || _a === void 0 ? void 0 : _a.maxRetries) !== undefined) {
+            this.msiRetryConfig.maxRetries = _options.retryOptions.maxRetries;
+        }
+        this.identityClient = new IdentityClient(Object.assign(Object.assign({}, _options), { additionalPolicies: [{ policy: imdsRetryPolicy(this.msiRetryConfig), position: "perCall" }] }));
+        this.managedIdentityApp = new msalCommon.ManagedIdentityApplication({
+            managedIdentityIdParams: {
+                userAssignedClientId: this.clientId,
+                userAssignedResourceId: this.resourceId,
+            },
+            system: {
+                // todo: proxyUrl?
+                disableInternalRetries: true,
+                networkClient: this.identityClient,
+                loggerOptions: {
+                    logLevel: getMSALLogLevel(logger$m.getLogLevel()),
+                    piiLoggingEnabled: (_b = options.loggingOptions) === null || _b === void 0 ? void 0 : _b.enableUnsafeSupportLogging,
+                    loggerCallback: defaultLoggerCallback(logger$e),
+                },
+            },
+        });
+        this.isAvailableIdentityClient = new IdentityClient(Object.assign(Object.assign({}, _options), { retryOptions: {
+                maxRetries: 0,
+            } }));
+    }
+    /**
+     * Authenticates with Microsoft Entra ID and returns an access token if successful.
+     * If authentication fails, a {@link CredentialUnavailableError} will be thrown with the details of the failure.
+     * If an unexpected error occurs, an {@link AuthenticationError} will be thrown with the details of the failure.
+     *
+     * @param scopes - The list of scopes for which the token will have access.
+     * @param options - The options used to configure any requests this
+     *                TokenCredential implementation might make.
+     */
+    async getToken(scopes, options = {}) {
+        logger$e.getToken.info("Using the MSAL provider for Managed Identity.");
+        const resource = mapScopesToResource(scopes);
+        if (!resource) {
+            throw new CredentialUnavailableError(`ManagedIdentityCredential: Multiple scopes are not supported. Scopes: ${JSON.stringify(scopes)}`);
+        }
+        return tracingClient.withSpan("ManagedIdentityCredential.getToken", options, async () => {
+            try {
+                const isTokenExchangeMsi = await tokenExchangeMsi.isAvailable({
+                    scopes,
+                    clientId: this.clientId,
+                    getTokenOptions: options,
+                    identityClient: this.identityClient,
+                    resourceId: this.resourceId,
+                });
+                // Most scenarios are handled by MSAL except for two:
+                // AKS pod identity - MSAL does not implement the token exchange flow.
+                // IMDS Endpoint probing - MSAL does not do any probing before trying to get a token.
+                // As a DefaultAzureCredential optimization we probe the IMDS endpoint with a short timeout and no retries before actually trying to get a token
+                // We will continue to implement these features in the Identity library.
+                const identitySource = this.managedIdentityApp.getManagedIdentitySource();
+                const isImdsMsi = identitySource === "DefaultToImds" || identitySource === "Imds"; // Neither actually checks that IMDS endpoint is available, just that it's the source the MSAL _would_ try to use.
+                if (isTokenExchangeMsi) {
+                    // In the AKS scenario we will use the existing tokenExchangeMsi indefinitely.
+                    logger$e.getToken.info("Using the token exchange managed identity.");
+                    const result = await tokenExchangeMsi.getToken({
+                        scopes,
+                        clientId: this.clientId,
+                        identityClient: this.identityClient,
+                        retryConfig: this.msiRetryConfig,
+                        resourceId: this.resourceId,
+                    });
+                    if (result === null) {
+                        throw new CredentialUnavailableError("The managed identity endpoint was reached, yet no tokens were received.");
+                    }
+                    return result;
+                }
+                else if (isImdsMsi) {
+                    // In the IMDS scenario we will probe the IMDS endpoint to ensure it's available before trying to get a token.
+                    // If the IMDS endpoint is not available and this is the source that MSAL will use, we will fail-fast with an error that tells DAC to move to the next credential.
+                    logger$e.getToken.info("Using the IMDS endpoint to probe for availability.");
+                    const isAvailable = await imdsMsi.isAvailable({
+                        scopes,
+                        clientId: this.clientId,
+                        getTokenOptions: options,
+                        identityClient: this.isAvailableIdentityClient,
+                        resourceId: this.resourceId,
+                    });
+                    if (!isAvailable) {
+                        throw new CredentialUnavailableError(`ManagedIdentityCredential: The managed identity endpoint is not available.`);
+                    }
+                }
+                // If we got this far, it means:
+                // - This is not a tokenExchangeMsi,
+                // - We already probed for IMDS endpoint availability and failed-fast if it's unreachable.
+                // We can proceed normally by calling MSAL for a token.
+                logger$e.getToken.info("Calling into MSAL for managed identity token.");
+                const token = await this.managedIdentityApp.acquireToken({
+                    resource,
+                });
+                this.ensureValidMsalToken(scopes, token, options);
+                logger$e.getToken.info(formatSuccess(scopes));
+                return {
+                    expiresOnTimestamp: token.expiresOn.getTime(),
+                    token: token.accessToken,
+                };
             }
-            return result;
-        },
-        async getToken(configuration, getTokenOptions = {}) {
-            const { scopes, clientId } = configuration;
-            const identityClientTokenCredentialOptions = {};
-            const workloadIdentityCredential = new WorkloadIdentityCredential(Object.assign(Object.assign({ clientId, tenantId: process.env.AZURE_TENANT_ID, tokenFilePath: process.env.AZURE_FEDERATED_TOKEN_FILE }, identityClientTokenCredentialOptions), { disableInstanceDiscovery: true }));
-            const token = await workloadIdentityCredential.getToken(scopes, getTokenOptions);
-            return token;
-        },
-    };
+            catch (err) {
+                logger$e.getToken.error(formatError(scopes, err));
+                // AuthenticationRequiredError described as Error to enforce authentication after trying to retrieve a token silently.
+                // TODO: why would this _ever_ happen considering we're not trying the silent request in this flow?
+                if (err.name === "AuthenticationRequiredError") {
+                    throw err;
+                }
+                if (isNetworkError(err)) {
+                    throw new CredentialUnavailableError(`ManagedIdentityCredential: Network unreachable. Message: ${err.message}`);
+                }
+                throw new CredentialUnavailableError(`ManagedIdentityCredential: Authentication failed. Message ${err.message}`);
+            }
+        });
+    }
+    /**
+     * Ensures the validity of the MSAL token
+     */
+    ensureValidMsalToken(scopes, msalToken, getTokenOptions) {
+        const createError = (message) => {
+            logger$e.getToken.info(message);
+            return new AuthenticationRequiredError({
+                scopes: Array.isArray(scopes) ? scopes : [scopes],
+                getTokenOptions,
+                message,
+            });
+        };
+        if (!msalToken) {
+            throw createError("No response");
+        }
+        if (!msalToken.expiresOn) {
+            throw createError(`Response had no "expiresOn" property.`);
+        }
+        if (!msalToken.accessToken) {
+            throw createError(`Response had no "accessToken" property.`);
+        }
+    }
+}
+function isNetworkError(err) {
+    // MSAL error
+    if (err.errorCode === "network_error") {
+        return true;
+    }
+    // Probe errors
+    if (err.code === "ENETUNREACH" || err.code === "EHOSTUNREACH") {
+        return true;
+    }
+    // This is a special case for Docker Desktop which responds with a 403 with a message that contains "A socket operation was attempted to an unreachable network" or "A socket operation was attempted to an unreachable host"
+    // rather than just timing out, as expected.
+    if (err.statusCode === 403 || err.code === 403) {
+        if (err.message.includes("unreachable")) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
-const logger$e = credentialLogger("ManagedIdentityCredential");
 /**
  * Attempts authentication using a managed identity available at the deployment environment.
  * This authentication type works in Azure VMs, App Service instances, Azure Functions applications,
@@ -20750,104 +21407,11 @@ class ManagedIdentityCredential {
      * @hidden
      */
     constructor(clientIdOrOptions, options) {
-        var _a, _b;
-        this.isEndpointUnavailable = null;
-        this.isAppTokenProviderInitialized = false;
-        this.msiRetryConfig = {
-            maxRetries: 5,
-            startDelayInMs: 800,
-            intervalIncrement: 2,
-        };
-        let _options;
-        if (typeof clientIdOrOptions === "string") {
-            this.clientId = clientIdOrOptions;
-            _options = options;
-        }
-        else {
-            this.clientId = clientIdOrOptions === null || clientIdOrOptions === void 0 ? void 0 : clientIdOrOptions.clientId;
-            _options = clientIdOrOptions;
-        }
-        this.resourceId = _options === null || _options === void 0 ? void 0 : _options.resourceId;
-        // For JavaScript users.
-        if (this.clientId && this.resourceId) {
-            throw new Error(`${ManagedIdentityCredential.name} - Client Id and Resource Id can't be provided at the same time.`);
-        }
-        if (((_a = _options === null || _options === void 0 ? void 0 : _options.retryOptions) === null || _a === void 0 ? void 0 : _a.maxRetries) !== undefined) {
-            this.msiRetryConfig.maxRetries = _options.retryOptions.maxRetries;
-        }
-        this.identityClient = new IdentityClient(_options);
-        this.isAvailableIdentityClient = new IdentityClient(Object.assign(Object.assign({}, _options), { retryOptions: {
-                maxRetries: 0,
-            } }));
-        /**  authority host validation and metadata discovery to be skipped in managed identity
-         * since this wasn't done previously before adding token cache support
-         */
-        this.confidentialApp = new msalCommon.ConfidentialClientApplication({
-            auth: {
-                authority: "https://login.microsoftonline.com/managed_identity",
-                clientId: (_b = this.clientId) !== null && _b !== void 0 ? _b : DeveloperSignOnClientId,
-                clientSecret: "dummy-secret",
-                cloudDiscoveryMetadata: '{"tenant_discovery_endpoint":"https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration","api-version":"1.1","metadata":[{"preferred_network":"login.microsoftonline.com","preferred_cache":"login.windows.net","aliases":["login.microsoftonline.com","login.windows.net","login.microsoft.com","sts.windows.net"]},{"preferred_network":"login.partner.microsoftonline.cn","preferred_cache":"login.partner.microsoftonline.cn","aliases":["login.partner.microsoftonline.cn","login.chinacloudapi.cn"]},{"preferred_network":"login.microsoftonline.de","preferred_cache":"login.microsoftonline.de","aliases":["login.microsoftonline.de"]},{"preferred_network":"login.microsoftonline.us","preferred_cache":"login.microsoftonline.us","aliases":["login.microsoftonline.us","login.usgovcloudapi.net"]},{"preferred_network":"login-us.microsoftonline.com","preferred_cache":"login-us.microsoftonline.com","aliases":["login-us.microsoftonline.com"]}]}',
-                authorityMetadata: '{"token_endpoint":"https://login.microsoftonline.com/common/oauth2/v2.0/token","token_endpoint_auth_methods_supported":["client_secret_post","private_key_jwt","client_secret_basic"],"jwks_uri":"https://login.microsoftonline.com/common/discovery/v2.0/keys","response_modes_supported":["query","fragment","form_post"],"subject_types_supported":["pairwise"],"id_token_signing_alg_values_supported":["RS256"],"response_types_supported":["code","id_token","code id_token","id_token token"],"scopes_supported":["openid","profile","email","offline_access"],"issuer":"https://login.microsoftonline.com/{tenantid}/v2.0","request_uri_parameter_supported":false,"userinfo_endpoint":"https://graph.microsoft.com/oidc/userinfo","authorization_endpoint":"https://login.microsoftonline.com/common/oauth2/v2.0/authorize","device_authorization_endpoint":"https://login.microsoftonline.com/common/oauth2/v2.0/devicecode","http_logout_supported":true,"frontchannel_logout_supported":true,"end_session_endpoint":"https://login.microsoftonline.com/common/oauth2/v2.0/logout","claims_supported":["sub","iss","cloud_instance_name","cloud_instance_host_name","cloud_graph_host_name","msgraph_host","aud","exp","iat","auth_time","acr","nonce","preferred_username","name","tid","ver","at_hash","c_hash","email"],"kerberos_endpoint":"https://login.microsoftonline.com/common/kerberos","tenant_region_scope":null,"cloud_instance_name":"microsoftonline.com","cloud_graph_host_name":"graph.windows.net","msgraph_host":"graph.microsoft.com","rbac_url":"https://pas.windows.net"}',
-                clientCapabilities: [],
-            },
-            system: {
-                loggerOptions: {
-                    logLevel: getMSALLogLevel(logger$r.getLogLevel()),
-                },
-            },
-        });
-    }
-    async cachedAvailableMSI(scopes, getTokenOptions) {
-        if (this.cachedMSI) {
-            return this.cachedMSI;
-        }
-        const MSIs = [
-            arcMsi,
-            fabricMsi,
-            appServiceMsi2019,
-            appServiceMsi2017,
-            cloudShellMsi,
-            tokenExchangeMsi(),
-            imdsMsi,
-        ];
-        for (const msi of MSIs) {
-            if (await msi.isAvailable({
-                scopes,
-                identityClient: this.isAvailableIdentityClient,
-                clientId: this.clientId,
-                resourceId: this.resourceId,
-                getTokenOptions,
-            })) {
-                this.cachedMSI = msi;
-                return msi;
-            }
-        }
-        throw new CredentialUnavailableError(`${ManagedIdentityCredential.name} - No MSI credential available`);
-    }
-    async authenticateManagedIdentity(scopes, getTokenOptions) {
-        const { span, updatedOptions } = tracingClient.startSpan(`${ManagedIdentityCredential.name}.authenticateManagedIdentity`, getTokenOptions);
-        try {
-            // Determining the available MSI, and avoiding checking for other MSIs while the program is running.
-            const availableMSI = await this.cachedAvailableMSI(scopes, updatedOptions);
-            return availableMSI.getToken({
-                identityClient: this.identityClient,
-                scopes,
-                clientId: this.clientId,
-                resourceId: this.resourceId,
-                retryConfig: this.msiRetryConfig,
-            }, updatedOptions);
-        }
-        catch (err) {
-            span.setStatus({
-                status: "error",
-                error: err,
-            });
-            throw err;
-        }
-        finally {
-            span.end();
-        }
+        // https://github.com/Azure/azure-sdk-for-js/issues/30189
+        // If needed, you may release a hotfix to quickly rollback to the legacy implementation by changing the following line to:
+        // this.implProvider = new LegacyMsiProvider(clientIdOrOptions, options);
+        // Once stabilized, you can remove the legacy implementation and inline the msalMsiProvider code here as a drop-in replacement.
+        this.implProvider = new MsalMsiProvider(clientIdOrOptions, options);
     }
     /**
      * Authenticates with Microsoft Entra ID and returns an access token if successful.
@@ -20859,176 +21423,7 @@ class ManagedIdentityCredential {
      *                TokenCredential implementation might make.
      */
     async getToken(scopes, options) {
-        let result = null;
-        const { span, updatedOptions } = tracingClient.startSpan(`${ManagedIdentityCredential.name}.getToken`, options);
-        try {
-            // isEndpointAvailable can be true, false, or null,
-            // If it's null, it means we don't yet know whether
-            // the endpoint is available and need to check for it.
-            if (this.isEndpointUnavailable !== true) {
-                const availableMSI = await this.cachedAvailableMSI(scopes, updatedOptions);
-                if (availableMSI.name === "tokenExchangeMsi") {
-                    result = await this.authenticateManagedIdentity(scopes, updatedOptions);
-                }
-                else {
-                    const appTokenParameters = {
-                        correlationId: this.identityClient.getCorrelationId(),
-                        tenantId: (options === null || options === void 0 ? void 0 : options.tenantId) || "managed_identity",
-                        scopes: Array.isArray(scopes) ? scopes : [scopes],
-                        claims: options === null || options === void 0 ? void 0 : options.claims,
-                    };
-                    // Added a check to see if SetAppTokenProvider was already defined.
-                    this.initializeSetAppTokenProvider();
-                    const authenticationResult = await this.confidentialApp.acquireTokenByClientCredential(Object.assign({}, appTokenParameters));
-                    result = this.handleResult(scopes, authenticationResult || undefined);
-                }
-                if (result === null) {
-                    // If authenticateManagedIdentity returns null,
-                    // it means no MSI endpoints are available.
-                    // If so, we avoid trying to reach to them in future requests.
-                    this.isEndpointUnavailable = true;
-                    // It also means that the endpoint answered with either 200 or 201 (see the sendTokenRequest method),
-                    // yet we had no access token. For this reason, we'll throw once with a specific message:
-                    const error = new CredentialUnavailableError("The managed identity endpoint was reached, yet no tokens were received.");
-                    logger$e.getToken.info(formatError(scopes, error));
-                    throw error;
-                }
-                // Since `authenticateManagedIdentity` didn't throw, and the result was not null,
-                // We will assume that this endpoint is reachable from this point forward,
-                // and avoid pinging again to it.
-                this.isEndpointUnavailable = false;
-            }
-            else {
-                // We've previously determined that the endpoint was unavailable,
-                // either because it was unreachable or permanently unable to authenticate.
-                const error = new CredentialUnavailableError("The managed identity endpoint is not currently available");
-                logger$e.getToken.info(formatError(scopes, error));
-                throw error;
-            }
-            logger$e.getToken.info(formatSuccess(scopes));
-            return result;
-        }
-        catch (err) {
-            // CredentialUnavailable errors are expected to reach here.
-            // We intend them to bubble up, so that DefaultAzureCredential can catch them.
-            if (err.name === "AuthenticationRequiredError") {
-                throw err;
-            }
-            // Expected errors to reach this point:
-            // - Errors coming from a method unexpectedly breaking.
-            // - When identityClient.sendTokenRequest throws, in which case
-            //   if the status code was 400, it means that the endpoint is working,
-            //   but no identity is available.
-            span.setStatus({
-                status: "error",
-                error: err,
-            });
-            // If either the network is unreachable,
-            // we can safely assume the credential is unavailable.
-            if (err.code === "ENETUNREACH") {
-                const error = new CredentialUnavailableError(`${ManagedIdentityCredential.name}: Unavailable. Network unreachable. Message: ${err.message}`);
-                logger$e.getToken.info(formatError(scopes, error));
-                throw error;
-            }
-            // If either the host was unreachable,
-            // we can safely assume the credential is unavailable.
-            if (err.code === "EHOSTUNREACH") {
-                const error = new CredentialUnavailableError(`${ManagedIdentityCredential.name}: Unavailable. No managed identity endpoint found. Message: ${err.message}`);
-                logger$e.getToken.info(formatError(scopes, error));
-                throw error;
-            }
-            // If err.statusCode has a value of 400, it comes from sendTokenRequest,
-            // and it means that the endpoint is working, but that no identity is available.
-            if (err.statusCode === 400) {
-                throw new CredentialUnavailableError(`${ManagedIdentityCredential.name}: The managed identity endpoint is indicating there's no available identity. Message: ${err.message}`);
-            }
-            // This is a special case for Docker Desktop which responds with a 403 with a message that contains "A socket operation was attempted to an unreachable network" or "A socket operation was attempted to an unreachable host"
-            // rather than just timing out, as expected.
-            if (err.statusCode === 403 || err.code === 403) {
-                if (err.message.includes("unreachable")) {
-                    const error = new CredentialUnavailableError(`${ManagedIdentityCredential.name}: Unavailable. Network unreachable. Message: ${err.message}`);
-                    logger$e.getToken.info(formatError(scopes, error));
-                    throw error;
-                }
-            }
-            // If the error has no status code, we can assume there was no available identity.
-            // This will throw silently during any ChainedTokenCredential.
-            if (err.statusCode === undefined) {
-                throw new CredentialUnavailableError(`${ManagedIdentityCredential.name}: Authentication failed. Message ${err.message}`);
-            }
-            // Any other error should break the chain.
-            throw new AuthenticationError(err.statusCode, {
-                error: `${ManagedIdentityCredential.name} authentication failed.`,
-                error_description: err.message,
-            });
-        }
-        finally {
-            // Finally is always called, both if we return and if we throw in the above try/catch.
-            span.end();
-        }
-    }
-    /**
-     * Handles the MSAL authentication result.
-     * If the result has an account, we update the local account reference.
-     * If the token received is invalid, an error will be thrown depending on what's missing.
-     */
-    handleResult(scopes, result, getTokenOptions) {
-        this.ensureValidMsalToken(scopes, result, getTokenOptions);
-        logger$e.getToken.info(formatSuccess(scopes));
-        return {
-            token: result.accessToken,
-            expiresOnTimestamp: result.expiresOn.getTime(),
-        };
-    }
-    /**
-     * Ensures the validity of the MSAL token
-     */
-    ensureValidMsalToken(scopes, msalToken, getTokenOptions) {
-        const error = (message) => {
-            logger$e.getToken.info(message);
-            return new AuthenticationRequiredError({
-                scopes: Array.isArray(scopes) ? scopes : [scopes],
-                getTokenOptions,
-                message,
-            });
-        };
-        if (!msalToken) {
-            throw error("No response");
-        }
-        if (!msalToken.expiresOn) {
-            throw error(`Response had no "expiresOn" property.`);
-        }
-        if (!msalToken.accessToken) {
-            throw error(`Response had no "accessToken" property.`);
-        }
-    }
-    initializeSetAppTokenProvider() {
-        if (!this.isAppTokenProviderInitialized) {
-            this.confidentialApp.SetAppTokenProvider(async (appTokenProviderParameters) => {
-                logger$e.info(`SetAppTokenProvider invoked with parameters- ${JSON.stringify(appTokenProviderParameters)}`);
-                const getTokenOptions = Object.assign({}, appTokenProviderParameters);
-                logger$e.info(`authenticateManagedIdentity invoked with scopes- ${JSON.stringify(appTokenProviderParameters.scopes)} and getTokenOptions - ${JSON.stringify(getTokenOptions)}`);
-                const resultToken = await this.authenticateManagedIdentity(appTokenProviderParameters.scopes, getTokenOptions);
-                if (resultToken) {
-                    logger$e.info(`SetAppTokenProvider will save the token in cache`);
-                    const expiresInSeconds = (resultToken === null || resultToken === void 0 ? void 0 : resultToken.expiresOnTimestamp)
-                        ? Math.floor((resultToken.expiresOnTimestamp - Date.now()) / 1000)
-                        : 0;
-                    return {
-                        accessToken: resultToken === null || resultToken === void 0 ? void 0 : resultToken.token,
-                        expiresInSeconds,
-                    };
-                }
-                else {
-                    logger$e.info(`SetAppTokenProvider token has "no_access_token_returned" as the saved token`);
-                    return {
-                        accessToken: "no_access_token_returned",
-                        expiresInSeconds: 0,
-                    };
-                }
-            });
-            this.isAppTokenProviderInitialized = true;
-        }
+        return this.implProvider.getToken(scopes, options);
     }
 }
 
@@ -21547,12 +21942,7 @@ class AzurePowerShellCredential {
                 ],
             ]);
             const result = results[1];
-            try {
-                return JSON.parse(result);
-            }
-            catch (e) {
-                throw new Error(`Unable to parse the output of PowerShell. Received output: ${result}`);
-            }
+            return parseJsonToken(result);
         }
         throw new Error(`Unable to execute PowerShell. Ensure that it is installed in your system`);
     }
@@ -21598,6 +21988,38 @@ class AzurePowerShellCredential {
             }
         });
     }
+}
+/**
+ *
+ * @internal
+ */
+async function parseJsonToken(result) {
+    const jsonRegex = /{[^{}]*}/g;
+    const matches = result.match(jsonRegex);
+    let resultWithoutToken = result;
+    if (matches) {
+        try {
+            for (const item of matches) {
+                try {
+                    const jsonContent = JSON.parse(item);
+                    if (jsonContent === null || jsonContent === void 0 ? void 0 : jsonContent.Token) {
+                        resultWithoutToken = resultWithoutToken.replace(item, "");
+                        if (resultWithoutToken) {
+                            logger$b.getToken.warning(resultWithoutToken);
+                        }
+                        return jsonContent;
+                    }
+                }
+                catch (e) {
+                    continue;
+                }
+            }
+        }
+        catch (e) {
+            throw new Error(`Unable to parse the output of PowerShell. Received output: ${result}`);
+        }
+    }
+    throw new Error(`No access token found in the output. Received output: ${result}`);
 }
 
 // Copyright (c) Microsoft Corporation.
@@ -22142,425 +22564,6 @@ class DefaultAzureCredential extends ChainedTokenCredential {
 
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
-/**
- * MSAL partial base client for Node.js.
- *
- * It completes the input configuration with some default values.
- * It also provides with utility protected methods that can be used from any of the clients,
- * which includes handlers for successful responses and errors.
- *
- * @internal
- */
-class MsalNode {
-    constructor(options) {
-        var _a, _b, _c, _d, _e, _f;
-        this.app = {};
-        this.caeApp = {};
-        this.requiresConfidential = false;
-        this.logger = options.logger;
-        this.msalConfig = this.defaultNodeMsalConfig(options);
-        this.tenantId = resolveTenantId(options.logger, options.tenantId, options.clientId);
-        this.additionallyAllowedTenantIds = resolveAdditionallyAllowedTenantIds((_a = options === null || options === void 0 ? void 0 : options.tokenCredentialOptions) === null || _a === void 0 ? void 0 : _a.additionallyAllowedTenants);
-        this.clientId = this.msalConfig.auth.clientId;
-        if (options === null || options === void 0 ? void 0 : options.getAssertion) {
-            this.getAssertion = options.getAssertion;
-        }
-        this.enableBroker = (_b = options === null || options === void 0 ? void 0 : options.brokerOptions) === null || _b === void 0 ? void 0 : _b.enabled;
-        this.enableMsaPassthrough = (_c = options === null || options === void 0 ? void 0 : options.brokerOptions) === null || _c === void 0 ? void 0 : _c.legacyEnableMsaPassthrough;
-        this.parentWindowHandle = (_d = options.brokerOptions) === null || _d === void 0 ? void 0 : _d.parentWindowHandle;
-        // If persistence has been configured
-        if (persistenceProvider !== undefined && ((_e = options.tokenCachePersistenceOptions) === null || _e === void 0 ? void 0 : _e.enabled)) {
-            const cacheBaseName = options.tokenCachePersistenceOptions.name || DEFAULT_TOKEN_CACHE_NAME;
-            const nonCaeOptions = Object.assign({ name: `${cacheBaseName}.${CACHE_NON_CAE_SUFFIX}` }, options.tokenCachePersistenceOptions);
-            const caeOptions = Object.assign({ name: `${cacheBaseName}.${CACHE_CAE_SUFFIX}` }, options.tokenCachePersistenceOptions);
-            this.createCachePlugin = () => persistenceProvider(nonCaeOptions);
-            this.createCachePluginCae = () => persistenceProvider(caeOptions);
-        }
-        else if ((_f = options.tokenCachePersistenceOptions) === null || _f === void 0 ? void 0 : _f.enabled) {
-            throw new Error([
-                "Persistent token caching was requested, but no persistence provider was configured.",
-                "You must install the identity-cache-persistence plugin package (`npm install --save @azure/identity-cache-persistence`)",
-                "and enable it by importing `useIdentityPlugin` from `@azure/identity` and calling",
-                "`useIdentityPlugin(cachePersistencePlugin)` before using `tokenCachePersistenceOptions`.",
-            ].join(" "));
-        }
-        // If broker has not been configured
-        if (!hasNativeBroker() && this.enableBroker) {
-            throw new Error([
-                "Broker for WAM was requested to be enabled, but no native broker was configured.",
-                "You must install the identity-broker plugin package (`npm install --save @azure/identity-broker`)",
-                "and enable it by importing `useIdentityPlugin` from `@azure/identity` and calling",
-                "`useIdentityPlugin(createNativeBrokerPlugin())` before using `enableBroker`.",
-            ].join(" "));
-        }
-        this.azureRegion = calculateRegionalAuthority(options.regionalAuthority);
-    }
-    /**
-     * Generates a MSAL configuration that generally works for Node.js
-     */
-    defaultNodeMsalConfig(options) {
-        var _a;
-        const clientId = options.clientId || DeveloperSignOnClientId;
-        const tenantId = resolveTenantId(options.logger, options.tenantId, options.clientId);
-        this.authorityHost = options.authorityHost || process.env.AZURE_AUTHORITY_HOST;
-        const authority = getAuthority(tenantId, this.authorityHost);
-        this.identityClient = new IdentityClient(Object.assign(Object.assign({}, options.tokenCredentialOptions), { authorityHost: authority, loggingOptions: options.loggingOptions }));
-        const clientCapabilities = [];
-        return {
-            auth: {
-                clientId,
-                authority,
-                knownAuthorities: getKnownAuthorities(tenantId, authority, options.disableInstanceDiscovery),
-                clientCapabilities,
-            },
-            // Cache is defined in this.prepare();
-            system: {
-                networkClient: this.identityClient,
-                loggerOptions: {
-                    loggerCallback: defaultLoggerCallback(options.logger),
-                    logLevel: getMSALLogLevel(logger$r.getLogLevel()),
-                    piiLoggingEnabled: (_a = options.loggingOptions) === null || _a === void 0 ? void 0 : _a.enableUnsafeSupportLogging,
-                },
-            },
-        };
-    }
-    getApp(appType, enableCae) {
-        const app = enableCae ? this.caeApp : this.app;
-        if (appType === "publicFirst") {
-            return (app.public || app.confidential);
-        }
-        else if (appType === "confidentialFirst") {
-            return (app.confidential || app.public);
-        }
-        else if (appType === "confidential") {
-            return app.confidential;
-        }
-        else {
-            return app.public;
-        }
-    }
-    /**
-     * Prepares the MSAL applications.
-     */
-    async init(options) {
-        if (options === null || options === void 0 ? void 0 : options.abortSignal) {
-            options.abortSignal.addEventListener("abort", () => {
-                // This will abort any pending request in the IdentityClient,
-                // based on the received or generated correlationId
-                this.identityClient.abortRequests(options.correlationId);
-            });
-        }
-        const app = (options === null || options === void 0 ? void 0 : options.enableCae) ? this.caeApp : this.app;
-        if (options === null || options === void 0 ? void 0 : options.enableCae) {
-            this.msalConfig.auth.clientCapabilities = ["cp1"];
-        }
-        if (app.public || app.confidential) {
-            return;
-        }
-        if ((options === null || options === void 0 ? void 0 : options.enableCae) && this.createCachePluginCae !== undefined) {
-            this.msalConfig.cache = {
-                cachePlugin: await this.createCachePluginCae(),
-            };
-        }
-        if (this.createCachePlugin !== undefined) {
-            this.msalConfig.cache = {
-                cachePlugin: await this.createCachePlugin(),
-            };
-        }
-        if (hasNativeBroker() && this.enableBroker) {
-            this.msalConfig.broker = {
-                nativeBrokerPlugin: nativeBrokerInfo.broker,
-            };
-            if (!this.parentWindowHandle) {
-                // error should have been thrown from within the constructor of InteractiveBrowserCredential
-                this.logger.warning("Parent window handle is not specified for the broker. This may cause unexpected behavior. Please provide the parentWindowHandle.");
-            }
-        }
-        if (options === null || options === void 0 ? void 0 : options.enableCae) {
-            this.caeApp.public = new msalCommon__namespace.PublicClientApplication(this.msalConfig);
-        }
-        else {
-            this.app.public = new msalCommon__namespace.PublicClientApplication(this.msalConfig);
-        }
-        if (this.getAssertion) {
-            this.msalConfig.auth.clientAssertion = await this.getAssertion();
-        }
-        // The confidential client requires either a secret, assertion or certificate.
-        if (this.msalConfig.auth.clientSecret ||
-            this.msalConfig.auth.clientAssertion ||
-            this.msalConfig.auth.clientCertificate) {
-            if (options === null || options === void 0 ? void 0 : options.enableCae) {
-                this.caeApp.confidential = new msalCommon__namespace.ConfidentialClientApplication(this.msalConfig);
-            }
-            else {
-                this.app.confidential = new msalCommon__namespace.ConfidentialClientApplication(this.msalConfig);
-            }
-        }
-        else {
-            if (this.requiresConfidential) {
-                throw new Error("Unable to generate the MSAL confidential client. Missing either the client's secret, certificate or assertion.");
-            }
-        }
-    }
-    /**
-     * Allows the cancellation of a MSAL request.
-     */
-    withCancellation(promise, abortSignal, onCancel) {
-        return new Promise((resolve, reject) => {
-            promise
-                .then((msalToken) => {
-                return resolve(msalToken);
-            })
-                .catch(reject);
-            if (abortSignal) {
-                abortSignal.addEventListener("abort", () => {
-                    onCancel === null || onCancel === void 0 ? void 0 : onCancel();
-                });
-            }
-        });
-    }
-    /**
-     * Returns the existing account, attempts to load the account from MSAL.
-     */
-    async getActiveAccount(enableCae = false) {
-        if (this.account) {
-            return this.account;
-        }
-        const cache = this.getApp("confidentialFirst", enableCae).getTokenCache();
-        const accountsByTenant = await (cache === null || cache === void 0 ? void 0 : cache.getAllAccounts());
-        if (!accountsByTenant) {
-            return;
-        }
-        if (accountsByTenant.length === 1) {
-            this.account = msalToPublic(this.clientId, accountsByTenant[0]);
-        }
-        else {
-            this.logger
-                .info(`More than one account was found authenticated for this Client ID and Tenant ID.
-However, no "authenticationRecord" has been provided for this credential,
-therefore we're unable to pick between these accounts.
-A new login attempt will be requested, to ensure the correct account is picked.
-To work with multiple accounts for the same Client ID and Tenant ID, please provide an "authenticationRecord" when initializing a credential to prevent this from happening.`);
-            return;
-        }
-        return this.account;
-    }
-    /**
-     * Attempts to retrieve a token from cache.
-     */
-    async getTokenSilent(scopes, options) {
-        var _a, _b, _c;
-        await this.getActiveAccount(options === null || options === void 0 ? void 0 : options.enableCae);
-        if (!this.account) {
-            throw new AuthenticationRequiredError({
-                scopes,
-                getTokenOptions: options,
-                message: "Silent authentication failed. We couldn't retrieve an active account from the cache.",
-            });
-        }
-        const silentRequest = {
-            // To be able to re-use the account, the Token Cache must also have been provided.
-            account: publicToMsal(this.account),
-            correlationId: options === null || options === void 0 ? void 0 : options.correlationId,
-            scopes,
-            authority: options === null || options === void 0 ? void 0 : options.authority,
-            claims: options === null || options === void 0 ? void 0 : options.claims,
-        };
-        if (hasNativeBroker() && this.enableBroker) {
-            if (!silentRequest.tokenQueryParameters) {
-                silentRequest.tokenQueryParameters = {};
-            }
-            if (!this.parentWindowHandle) {
-                // error should have been thrown from within the constructor of InteractiveBrowserCredential
-                this.logger.warning("Parent window handle is not specified for the broker. This may cause unexpected behavior. Please provide the parentWindowHandle.");
-            }
-            if (this.enableMsaPassthrough) {
-                silentRequest.tokenQueryParameters["msal_request_type"] = "consumer_passthrough";
-            }
-        }
-        try {
-            this.logger.info("Attempting to acquire token silently");
-            /**
-             * The following code to retrieve all accounts is done as a workaround in an attempt to force the
-             * refresh of the token cache with the token and the account passed in through the
-             * `authenticationRecord` parameter. See issue - https://github.com/Azure/azure-sdk-for-js/issues/24349#issuecomment-1496715651
-             * This workaround serves as a workaround for silent authentication not happening when authenticationRecord is passed.
-             */
-            await ((_a = this.getApp("publicFirst", options === null || options === void 0 ? void 0 : options.enableCae)) === null || _a === void 0 ? void 0 : _a.getTokenCache().getAllAccounts());
-            const response = (_c = (await ((_b = this.getApp("confidential", options === null || options === void 0 ? void 0 : options.enableCae)) === null || _b === void 0 ? void 0 : _b.acquireTokenSilent(silentRequest)))) !== null && _c !== void 0 ? _c : (await this.getApp("public", options === null || options === void 0 ? void 0 : options.enableCae).acquireTokenSilent(silentRequest));
-            return this.handleResult(scopes, response || undefined);
-        }
-        catch (err) {
-            throw handleMsalError(scopes, err, options);
-        }
-    }
-    /**
-     * Wrapper around each MSAL flow get token operation: doGetToken.
-     * If disableAutomaticAuthentication is sent through the constructor, it will prevent MSAL from requesting the user input.
-     */
-    async getToken(scopes, options = {}) {
-        const tenantId = processMultiTenantRequest(this.tenantId, options, this.additionallyAllowedTenantIds) ||
-            this.tenantId;
-        options.authority = getAuthority(tenantId, this.authorityHost);
-        options.correlationId = (options === null || options === void 0 ? void 0 : options.correlationId) || randomUUID();
-        await this.init(options);
-        try {
-            // MSAL now caches tokens based on their claims,
-            // so now one has to keep track fo claims in order to retrieve the newer tokens from acquireTokenSilent
-            // This update happened on PR: https://github.com/AzureAD/microsoft-authentication-library-for-js/pull/4533
-            const optionsClaims = options.claims;
-            if (optionsClaims) {
-                this.cachedClaims = optionsClaims;
-            }
-            if (this.cachedClaims && !optionsClaims) {
-                options.claims = this.cachedClaims;
-            }
-            // We don't return the promise since we want to catch errors right here.
-            return await this.getTokenSilent(scopes, options);
-        }
-        catch (err) {
-            if (err.name !== "AuthenticationRequiredError") {
-                throw err;
-            }
-            if (options === null || options === void 0 ? void 0 : options.disableAutomaticAuthentication) {
-                throw new AuthenticationRequiredError({
-                    scopes,
-                    getTokenOptions: options,
-                    message: "Automatic authentication has been disabled. You may call the authentication() method.",
-                });
-            }
-            this.logger.info(`Silent authentication failed, falling back to interactive method.`);
-            return this.doGetToken(scopes, options);
-        }
-    }
-    /**
-     * Handles the MSAL authentication result.
-     * If the result has an account, we update the local account reference.
-     * If the token received is invalid, an error will be thrown depending on what's missing.
-     */
-    handleResult(scopes, result, getTokenOptions) {
-        if (result === null || result === void 0 ? void 0 : result.account) {
-            this.account = msalToPublic(this.clientId, result.account);
-        }
-        ensureValidMsalToken(scopes, result, getTokenOptions);
-        this.logger.getToken.info(formatSuccess(scopes));
-        return {
-            token: result.accessToken,
-            expiresOnTimestamp: result.expiresOn.getTime(),
-        };
-    }
-}
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
-/**
- * A call to open(), but mockable
- * @internal
- */
-const interactiveBrowserMockable = {
-    open,
-};
-/**
- * This MSAL client sets up a web server to listen for redirect callbacks, then calls to the MSAL's public application's `acquireTokenByDeviceCode` during `doGetToken`
- * to trigger the authentication flow, and then respond based on the values obtained from the redirect callback
- * @internal
- */
-class MsalOpenBrowser extends MsalNode {
-    constructor(options) {
-        var _a, _b, _c, _d;
-        super(options);
-        this.loginHint = options.loginHint;
-        this.errorTemplate = (_a = options.browserCustomizationOptions) === null || _a === void 0 ? void 0 : _a.errorMessage;
-        this.successTemplate = (_b = options.browserCustomizationOptions) === null || _b === void 0 ? void 0 : _b.successMessage;
-        this.logger = credentialLogger("Node.js MSAL Open Browser");
-        this.useDefaultBrokerAccount =
-            ((_c = options.brokerOptions) === null || _c === void 0 ? void 0 : _c.enabled) && ((_d = options.brokerOptions) === null || _d === void 0 ? void 0 : _d.useDefaultBrokerAccount);
-    }
-    async doGetToken(scopes, options = {}) {
-        try {
-            const interactiveRequest = {
-                openBrowser: async (url) => {
-                    await interactiveBrowserMockable.open(url, { wait: true, newInstance: true });
-                },
-                scopes,
-                authority: options === null || options === void 0 ? void 0 : options.authority,
-                claims: options === null || options === void 0 ? void 0 : options.claims,
-                correlationId: options === null || options === void 0 ? void 0 : options.correlationId,
-                loginHint: this.loginHint,
-                errorTemplate: this.errorTemplate,
-                successTemplate: this.successTemplate,
-            };
-            if (hasNativeBroker() && this.enableBroker) {
-                return this.doGetBrokeredToken(scopes, interactiveRequest, {
-                    enableCae: options.enableCae,
-                    useDefaultBrokerAccount: this.useDefaultBrokerAccount,
-                });
-            }
-            // If the broker is not enabled, we will fall back to interactive authentication
-            if (hasNativeBroker() && !this.enableBroker) {
-                this.logger.verbose("Authentication will resume normally without the broker, since it's not enabled");
-            }
-            const result = await this.getApp("public", options === null || options === void 0 ? void 0 : options.enableCae).acquireTokenInteractive(interactiveRequest);
-            return this.handleResult(scopes, result || undefined);
-        }
-        catch (err) {
-            throw handleMsalError(scopes, err, options);
-        }
-    }
-    /**
-     * A helper function that supports brokered authentication through the MSAL's public application.
-     *
-     * When options.useDefaultBrokerAccount is true, the method will attempt to authenticate using the default broker account.
-     * If the default broker account is not available, the method will fall back to interactive authentication.
-     */
-    async doGetBrokeredToken(scopes, interactiveRequest, options) {
-        var _a;
-        this.logger.verbose("Authentication will resume through the broker");
-        if (this.parentWindowHandle) {
-            interactiveRequest.windowHandle = Buffer.from(this.parentWindowHandle);
-        }
-        else {
-            // error should have been thrown from within the constructor of InteractiveBrowserCredential
-            this.logger.warning("Parent window handle is not specified for the broker. This may cause unexpected behavior. Please provide the parentWindowHandle.");
-        }
-        if (this.enableMsaPassthrough) {
-            ((_a = interactiveRequest.tokenQueryParameters) !== null && _a !== void 0 ? _a : (interactiveRequest.tokenQueryParameters = {}))["msal_request_type"] =
-                "consumer_passthrough";
-        }
-        if (options.useDefaultBrokerAccount) {
-            interactiveRequest.prompt = "none";
-            this.logger.verbose("Attempting broker authentication using the default broker account");
-        }
-        else {
-            interactiveRequest.prompt = undefined;
-            this.logger.verbose("Attempting broker authentication without the default broker account");
-        }
-        try {
-            const result = await this.getApp("public", options === null || options === void 0 ? void 0 : options.enableCae).acquireTokenInteractive(interactiveRequest);
-            if (result.fromNativeBroker) {
-                this.logger.verbose(`This result is returned from native broker`);
-            }
-            return this.handleResult(scopes, result || undefined);
-        }
-        catch (e) {
-            this.logger.verbose(`Failed to authenticate through the broker: ${e.message}`);
-            // If we tried to use the default broker account and failed, fall back to interactive authentication
-            if (options.useDefaultBrokerAccount) {
-                return this.doGetBrokeredToken(scopes, interactiveRequest, {
-                    enableCae: options.enableCae,
-                    useDefaultBrokerAccount: false,
-                });
-            }
-            else {
-                // If we're not using the default broker account, throw the error
-                throw handleMsalError(scopes, e);
-            }
-        }
-    }
-}
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
 const logger$4 = credentialLogger("InteractiveBrowserCredential");
 /**
  * Enables authentication to Microsoft Entra ID inside of the web browser
@@ -22580,31 +22583,27 @@ class InteractiveBrowserCredential {
      * @param options - Options for configuring the client which makes the authentication requests.
      */
     constructor(options) {
-        var _a, _b, _c, _d;
-        const redirectUri = typeof options.redirectUri === "function"
-            ? options.redirectUri()
-            : options.redirectUri || "http://localhost";
-        this.tenantId = options === null || options === void 0 ? void 0 : options.tenantId;
+        var _a, _b, _c, _d, _e;
+        this.tenantId = resolveTenantId(logger$4, options.tenantId, options.clientId);
         this.additionallyAllowedTenantIds = resolveAdditionallyAllowedTenantIds(options === null || options === void 0 ? void 0 : options.additionallyAllowedTenants);
+        const msalClientOptions = Object.assign(Object.assign({}, options), { tokenCredentialOptions: options, logger: logger$4 });
         const ibcNodeOptions = options;
+        this.browserCustomizationOptions = ibcNodeOptions.browserCustomizationOptions;
+        this.loginHint = ibcNodeOptions.loginHint;
         if ((_a = ibcNodeOptions === null || ibcNodeOptions === void 0 ? void 0 : ibcNodeOptions.brokerOptions) === null || _a === void 0 ? void 0 : _a.enabled) {
             if (!((_b = ibcNodeOptions === null || ibcNodeOptions === void 0 ? void 0 : ibcNodeOptions.brokerOptions) === null || _b === void 0 ? void 0 : _b.parentWindowHandle)) {
                 throw new Error("In order to do WAM authentication, `parentWindowHandle` under `brokerOptions` is a required parameter");
             }
             else {
-                this.msalFlow = new MsalOpenBrowser(Object.assign(Object.assign({}, options), { tokenCredentialOptions: options, logger: logger$4,
-                    redirectUri, browserCustomizationOptions: ibcNodeOptions === null || ibcNodeOptions === void 0 ? void 0 : ibcNodeOptions.browserCustomizationOptions, brokerOptions: {
-                        enabled: true,
-                        parentWindowHandle: ibcNodeOptions.brokerOptions.parentWindowHandle,
-                        legacyEnableMsaPassthrough: (_c = ibcNodeOptions.brokerOptions) === null || _c === void 0 ? void 0 : _c.legacyEnableMsaPassthrough,
-                        useDefaultBrokerAccount: (_d = ibcNodeOptions.brokerOptions) === null || _d === void 0 ? void 0 : _d.useDefaultBrokerAccount,
-                    } }));
+                msalClientOptions.brokerOptions = {
+                    enabled: true,
+                    parentWindowHandle: ibcNodeOptions.brokerOptions.parentWindowHandle,
+                    legacyEnableMsaPassthrough: (_c = ibcNodeOptions.brokerOptions) === null || _c === void 0 ? void 0 : _c.legacyEnableMsaPassthrough,
+                    useDefaultBrokerAccount: (_d = ibcNodeOptions.brokerOptions) === null || _d === void 0 ? void 0 : _d.useDefaultBrokerAccount,
+                };
             }
         }
-        else {
-            this.msalFlow = new MsalOpenBrowser(Object.assign(Object.assign({}, options), { tokenCredentialOptions: options, logger: logger$4,
-                redirectUri, browserCustomizationOptions: ibcNodeOptions === null || ibcNodeOptions === void 0 ? void 0 : ibcNodeOptions.browserCustomizationOptions }));
-        }
+        this.msalClient = createMsalClient((_e = options.clientId) !== null && _e !== void 0 ? _e : DeveloperSignOnClientId, this.tenantId, msalClientOptions);
         this.disableAutomaticAuthentication = options === null || options === void 0 ? void 0 : options.disableAutomaticAuthentication;
     }
     /**
@@ -22623,7 +22622,7 @@ class InteractiveBrowserCredential {
         return tracingClient.withSpan(`${this.constructor.name}.getToken`, options, async (newOptions) => {
             newOptions.tenantId = processMultiTenantRequest(this.tenantId, newOptions, this.additionallyAllowedTenantIds, logger$4);
             const arrayScopes = ensureScopes(scopes);
-            return this.msalFlow.getToken(arrayScopes, Object.assign(Object.assign({}, newOptions), { disableAutomaticAuthentication: this.disableAutomaticAuthentication }));
+            return this.msalClient.getTokenByInteractiveRequest(arrayScopes, Object.assign(Object.assign({}, newOptions), { disableAutomaticAuthentication: this.disableAutomaticAuthentication, browserCustomizationOptions: this.browserCustomizationOptions, loginHint: this.loginHint }));
         });
     }
     /**
@@ -22642,8 +22641,8 @@ class InteractiveBrowserCredential {
     async authenticate(scopes, options = {}) {
         return tracingClient.withSpan(`${this.constructor.name}.authenticate`, options, async (newOptions) => {
             const arrayScopes = ensureScopes(scopes);
-            await this.msalFlow.getToken(arrayScopes, newOptions);
-            return this.msalFlow.getActiveAccount();
+            await this.msalClient.getTokenByInteractiveRequest(arrayScopes, Object.assign(Object.assign({}, newOptions), { disableAutomaticAuthentication: false, browserCustomizationOptions: this.browserCustomizationOptions, loginHint: this.loginHint }));
+            return this.msalClient.getActiveAccount();
         });
     }
 }
@@ -22804,30 +22803,45 @@ class AzurePipelinesCredential {
             }),
         });
         const response = await this.identityClient.sendRequest(request);
-        const text = response.bodyAsText;
-        if (!text) {
-            logger$2.error(`${credentialName$1}: Authenticated Failed. Received null token from OIDC request. Response status- ${response.status}. Complete response - ${JSON.stringify(response)}`);
-            throw new AuthenticationError(response.status, `${credentialName$1}: Authenticated Failed. Received null token from OIDC request. Response status- ${response.status}. Complete response - ${JSON.stringify(response)}`);
+        return handleOidcResponse(response);
+    }
+}
+function handleOidcResponse(response) {
+    const text = response.bodyAsText;
+    if (!text) {
+        logger$2.error(`${credentialName$1}: Authentication Failed. Received null token from OIDC request. Response status- ${response.status}. Complete response - ${JSON.stringify(response)}`);
+        throw new AuthenticationError(response.status, {
+            error: `${credentialName$1}: Authentication Failed. Received null token from OIDC request.`,
+            error_description: `${JSON.stringify(response)}. See the troubleshooting guide for more information: https://aka.ms/azsdk/js/identity/azurepipelinescredential/troubleshoot`,
+        });
+    }
+    try {
+        const result = JSON.parse(text);
+        if (result === null || result === void 0 ? void 0 : result.oidcToken) {
+            return result.oidcToken;
         }
-        try {
-            const result = JSON.parse(text);
-            if (result === null || result === void 0 ? void 0 : result.oidcToken) {
-                return result.oidcToken;
+        else {
+            const errorMessage = `${credentialName$1}: Authentication Failed. oidcToken field not detected in the response.`;
+            let errorDescription = ``;
+            if (response.status !== 200) {
+                errorDescription = `Complete response - ${JSON.stringify(result)}. See the troubleshooting guide for more information: https://aka.ms/azsdk/js/identity/azurepipelinescredential/troubleshoot`;
             }
-            else {
-                let errorMessage = `${credentialName$1}: Authentication Failed. oidcToken field not detected in the response.`;
-                if (response.status !== 200) {
-                    errorMessage += `Response = ${JSON.stringify(result)}`;
-                }
-                logger$2.error(errorMessage);
-                throw new AuthenticationError(response.status, errorMessage);
-            }
+            logger$2.error(errorMessage);
+            logger$2.error(errorDescription);
+            throw new AuthenticationError(response.status, {
+                error: errorMessage,
+                error_description: errorDescription,
+            });
         }
-        catch (e) {
-            logger$2.error(e.message);
-            logger$2.error(`${credentialName$1}: Authentication Failed. oidcToken field not detected in the response. Response = ${text}`);
-            throw new AuthenticationError(response.status, `${credentialName$1}: Authentication Failed. oidcToken field not detected in the response. Response = ${text}`);
-        }
+    }
+    catch (e) {
+        const errorDetails = `${credentialName$1}: Authentication Failed. oidcToken field not detected in the response.`;
+        logger$2.error(`Response from service = ${text} and error message = ${e.message}`);
+        logger$2.error(errorDetails);
+        throw new AuthenticationError(response.status, {
+            error: errorDetails,
+            error_description: `Response = ${text}. See the troubleshooting guide for more information: https://aka.ms/azsdk/js/identity/azurepipelinescredential/troubleshoot`,
+        });
     }
 }
 
@@ -22887,102 +22901,6 @@ class AuthorizationCodeCredential {
 
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
-const readFileAsync = util.promisify(fs.readFile);
-/**
- * Tries to asynchronously load a certificate from the given path.
- *
- * @param configuration - Either the PEM value or the path to the certificate.
- * @param sendCertificateChain - Option to include x5c header for SubjectName and Issuer name authorization.
- * @returns - The certificate parts, or `undefined` if the certificate could not be loaded.
- * @internal
- */
-async function parseCertificate(configuration, sendCertificateChain) {
-    const certificateParts = {};
-    const certificate = configuration
-        .certificate;
-    const certificatePath = configuration
-        .certificatePath;
-    certificateParts.certificateContents =
-        certificate || (await readFileAsync(certificatePath, "utf8"));
-    if (sendCertificateChain) {
-        certificateParts.x5c = certificateParts.certificateContents;
-    }
-    const certificatePattern = /(-+BEGIN CERTIFICATE-+)(\n\r?|\r\n?)([A-Za-z0-9+/\n\r]+=*)(\n\r?|\r\n?)(-+END CERTIFICATE-+)/g;
-    const publicKeys = [];
-    // Match all possible certificates, in the order they are in the file. These will form the chain that is used for x5c
-    let match;
-    do {
-        match = certificatePattern.exec(certificateParts.certificateContents);
-        if (match) {
-            publicKeys.push(match[3]);
-        }
-    } while (match);
-    if (publicKeys.length === 0) {
-        throw new Error("The file at the specified path does not contain a PEM-encoded certificate.");
-    }
-    certificateParts.thumbprint = crypto.createHash("sha1")
-        .update(Buffer.from(publicKeys[0], "base64"))
-        .digest("hex")
-        .toUpperCase();
-    return certificateParts;
-}
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
-/**
- * MSAL on behalf of flow. Calls to MSAL's confidential application's `acquireTokenOnBehalfOf` during `doGetToken`.
- * @internal
- */
-class MsalOnBehalfOf extends MsalNode {
-    constructor(options) {
-        super(options);
-        this.logger.info("Initialized MSAL's On-Behalf-Of flow");
-        this.requiresConfidential = true;
-        this.userAssertionToken = options.userAssertionToken;
-        this.certificatePath = options.certificatePath;
-        this.sendCertificateChain = options.sendCertificateChain;
-        this.clientSecret = options.clientSecret;
-    }
-    // Changing the MSAL configuration asynchronously
-    async init(options) {
-        if (this.certificatePath) {
-            try {
-                const parts = await parseCertificate({ certificatePath: this.certificatePath }, this.sendCertificateChain);
-                this.msalConfig.auth.clientCertificate = {
-                    thumbprint: parts.thumbprint,
-                    privateKey: parts.certificateContents,
-                    x5c: parts.x5c,
-                };
-            }
-            catch (error) {
-                this.logger.info(formatError("", error));
-                throw error;
-            }
-        }
-        else {
-            this.msalConfig.auth.clientSecret = this.clientSecret;
-        }
-        return super.init(options);
-    }
-    async doGetToken(scopes, options = {}) {
-        try {
-            const result = await this.getApp("confidential", options.enableCae).acquireTokenOnBehalfOf({
-                scopes,
-                correlationId: options.correlationId,
-                authority: options.authority,
-                claims: options.claims,
-                oboAssertion: this.userAssertionToken,
-            });
-            return this.handleResult(scopes, result || undefined);
-        }
-        catch (err) {
-            throw handleMsalError(scopes, err, options);
-        }
-    }
-}
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
 const credentialName = "OnBehalfOfCredential";
 const logger = credentialLogger(credentialName);
 /**
@@ -22990,16 +22908,24 @@ const logger = credentialLogger(credentialName);
  */
 class OnBehalfOfCredential {
     constructor(options) {
-        this.options = options;
         const { clientSecret } = options;
-        const { certificatePath } = options;
+        const { certificatePath, sendCertificateChain } = options;
+        const { getAssertion } = options;
         const { tenantId, clientId, userAssertionToken, additionallyAllowedTenants: additionallyAllowedTenantIds, } = options;
-        if (!tenantId || !clientId || !(clientSecret || certificatePath) || !userAssertionToken) {
-            throw new Error(`${credentialName}: tenantId, clientId, clientSecret (or certificatePath) and userAssertionToken are required parameters.`);
+        if (!tenantId ||
+            !clientId ||
+            !(clientSecret || certificatePath || getAssertion) ||
+            !userAssertionToken) {
+            throw new Error(`${credentialName}: tenantId, clientId, clientSecret (or certificatePath or getAssertion) and userAssertionToken are required parameters.`);
         }
+        this.certificatePath = certificatePath;
+        this.clientSecret = clientSecret;
+        this.userAssertionToken = userAssertionToken;
+        this.sendCertificateChain = sendCertificateChain;
+        this.clientAssertion = getAssertion;
         this.tenantId = tenantId;
         this.additionallyAllowedTenantIds = resolveAdditionallyAllowedTenantIds(additionallyAllowedTenantIds);
-        this.msalFlow = new MsalOnBehalfOf(Object.assign(Object.assign({}, this.options), { logger, tokenCredentialOptions: this.options }));
+        this.msalClient = createMsalClient(clientId, this.tenantId, Object.assign(Object.assign({}, options), { logger, tokenCredentialOptions: options }));
     }
     /**
      * Authenticates with Microsoft Entra ID and returns an access token if successful.
@@ -23012,8 +22938,62 @@ class OnBehalfOfCredential {
         return tracingClient.withSpan(`${credentialName}.getToken`, options, async (newOptions) => {
             newOptions.tenantId = processMultiTenantRequest(this.tenantId, newOptions, this.additionallyAllowedTenantIds, logger);
             const arrayScopes = ensureScopes(scopes);
-            return this.msalFlow.getToken(arrayScopes, newOptions);
+            if (this.certificatePath) {
+                const clientCertificate = await this.buildClientCertificate(this.certificatePath);
+                return this.msalClient.getTokenOnBehalfOf(arrayScopes, this.userAssertionToken, clientCertificate, newOptions);
+            }
+            else if (this.clientSecret) {
+                return this.msalClient.getTokenOnBehalfOf(arrayScopes, this.userAssertionToken, this.clientSecret, options);
+            }
+            else if (this.clientAssertion) {
+                return this.msalClient.getTokenOnBehalfOf(arrayScopes, this.userAssertionToken, this.clientAssertion, options);
+            }
+            else {
+                // this is an invalid scenario and is a bug, as the constructor should have thrown an error if neither clientSecret nor certificatePath nor clientAssertion were provided
+                throw new Error("Expected either clientSecret or certificatePath or clientAssertion to be defined.");
+            }
         });
+    }
+    async buildClientCertificate(certificatePath) {
+        try {
+            const parts = await this.parseCertificate({ certificatePath }, this.sendCertificateChain);
+            return {
+                thumbprint: parts.thumbprint,
+                privateKey: parts.certificateContents,
+                x5c: parts.x5c,
+            };
+        }
+        catch (error) {
+            logger.info(formatError("", error));
+            throw error;
+        }
+    }
+    async parseCertificate(configuration, sendCertificateChain) {
+        const certificatePath = configuration.certificatePath;
+        const certificateContents = await promises$1.readFile(certificatePath, "utf8");
+        const x5c = sendCertificateChain ? certificateContents : undefined;
+        const certificatePattern = /(-+BEGIN CERTIFICATE-+)(\n\r?|\r\n?)([A-Za-z0-9+/\n\r]+=*)(\n\r?|\r\n?)(-+END CERTIFICATE-+)/g;
+        const publicKeys = [];
+        // Match all possible certificates, in the order they are in the file. These will form the chain that is used for x5c
+        let match;
+        do {
+            match = certificatePattern.exec(certificateContents);
+            if (match) {
+                publicKeys.push(match[3]);
+            }
+        } while (match);
+        if (publicKeys.length === 0) {
+            throw new Error("The file at the specified path does not contain a PEM-encoded certificate.");
+        }
+        const thumbprint = node_crypto.createHash("sha1")
+            .update(Buffer.from(publicKeys[0], "base64"))
+            .digest("hex")
+            .toUpperCase();
+        return {
+            certificateContents,
+            thumbprint,
+            x5c,
+        };
     }
 }
 
@@ -23105,7 +23085,7 @@ exports.WorkloadIdentityCredential = WorkloadIdentityCredential;
 exports.deserializeAuthenticationRecord = deserializeAuthenticationRecord;
 exports.getBearerTokenProvider = getBearerTokenProvider;
 exports.getDefaultAzureCredential = getDefaultAzureCredential;
-exports.logger = logger$q;
+exports.logger = logger$l;
 exports.serializeAuthenticationRecord = serializeAuthenticationRecord;
 exports.useIdentityPlugin = useIdentityPlugin;
 //# sourceMappingURL=index.js.map
@@ -32946,7 +32926,7 @@ var __asyncValues = (this && this.__asyncValues) || function (o) {
 };
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.pruneTask = exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.createJob = exports.EXTERNALS_VOLUME_NAME = exports.POD_VOLUME_NAME = void 0;
+exports.removeTemporaryJob = exports.pruneTask = exports.isTaskContainerAlpine = exports.getPrepareJobTimeoutSeconds = exports.execTaskStep = exports.waitJobToStop = exports.createJob = exports.EXTERNALS_VOLUME_NAME = exports.POD_VOLUME_NAME = void 0;
 var core = __importStar(__nccwpck_require__(2186));
 var arm_appcontainers_1 = __nccwpck_require__(223);
 var identity_1 = __nccwpck_require__(3084);
@@ -33023,6 +33003,46 @@ function createJob(jobTaskProperties, services) {
     });
 }
 exports.createJob = createJob;
+/**
+ * Wait for execution to stop. Polls job status for each 10 seconds.
+ * @param resourceGroupName Resource group containing the waited job
+ * @param jobName Name of the waited job
+ * @param jobExecutionName Execution to wait for
+ * @returns true if execution completed successfully, or false if there was an error.
+ */
+function waitJobToStop(resourceGroupName, jobName, jobExecutionName) {
+    return __awaiter(this, void 0, void 0, function () {
+        var finalStates;
+        var _this = this;
+        return __generator(this, function (_a) {
+            finalStates = [
+                arm_appcontainers_1.KnownJobExecutionRunningState.Failed,
+                arm_appcontainers_1.KnownJobExecutionRunningState.Stopped,
+                arm_appcontainers_1.KnownJobExecutionRunningState.Succeeded,
+            ].map(function (state) { return state.toString(); });
+            return [2 /*return*/, new Promise(function (resolve) {
+                    var timer = setInterval(function () { return __awaiter(_this, void 0, void 0, function () {
+                        var execution;
+                        return __generator(this, function (_a) {
+                            switch (_a.label) {
+                                case 0: return [4 /*yield*/, acaClient.jobExecution(resourceGroupName, jobName, jobExecutionName)];
+                                case 1:
+                                    execution = _a.sent();
+                                    core.debug("Execution ".concat(execution.id, " (name: ").concat(execution.name, ") has now status ").concat(execution.status, ". End time is set to ").concat(execution.endTime));
+                                    if (execution.endTime || (execution.status && finalStates.includes(execution.status))) {
+                                        core.debug("Execution ".concat(jobExecutionName, " ended with status ").concat(execution.status));
+                                        clearInterval(timer);
+                                        resolve(execution.status === arm_appcontainers_1.KnownJobExecutionRunningState.Succeeded);
+                                    }
+                                    return [2 /*return*/];
+                            }
+                        });
+                    }); }, 10000);
+                })];
+        });
+    });
+}
+exports.waitJobToStop = waitJobToStop;
 function execTaskStep(command, _taskArn, _containerName) {
     return __awaiter(this, void 0, void 0, function () {
         var jobId, rc;
@@ -33073,62 +33093,76 @@ function isTaskContainerAlpine(taskArn, containerName) {
 exports.isTaskContainerAlpine = isTaskContainerAlpine;
 function pruneTask() {
     var _a, e_1, _b, _c;
-    var _d;
+    var _d, _e;
     return __awaiter(this, void 0, void 0, function () {
-        var startedBy, resourceGroup, jobs, prunes, _e, jobs_1, jobs_1_1, job, e_1_1;
-        return __generator(this, function (_f) {
-            switch (_f.label) {
+        var startedBy, resourceGroup, jobs, prunes, _f, jobs_1, jobs_1_1, job, e_1_1;
+        return __generator(this, function (_g) {
+            switch (_g.label) {
                 case 0:
                     startedBy = process.env.GITHUB_RUN_ID;
                     resourceGroup = process.env.RG_NAME;
-                    core.debug("Obtaining jobs with tag startedBy: ".concat(startedBy));
-                    jobs = acaClient.jobs.listByResourceGroup(process.env.RG_NAME);
+                    core.debug("Obtaining jobs with tag startedBy: ".concat(startedBy, " from resource group ").concat(resourceGroup));
+                    jobs = acaClient.jobs.listByResourceGroup(resourceGroup);
                     prunes = [];
-                    _f.label = 1;
+                    core.debug("Checking received jobs for specific tag: startedBy=".concat(startedBy));
+                    _g.label = 1;
                 case 1:
-                    _f.trys.push([1, 6, 7, 12]);
-                    _e = true, jobs_1 = __asyncValues(jobs);
-                    _f.label = 2;
+                    _g.trys.push([1, 6, 7, 12]);
+                    _f = true, jobs_1 = __asyncValues(jobs);
+                    _g.label = 2;
                 case 2: return [4 /*yield*/, jobs_1.next()];
                 case 3:
-                    if (!(jobs_1_1 = _f.sent(), _a = jobs_1_1.done, !_a)) return [3 /*break*/, 5];
+                    if (!(jobs_1_1 = _g.sent(), _a = jobs_1_1.done, !_a)) return [3 /*break*/, 5];
                     _c = jobs_1_1.value;
-                    _e = false;
+                    _f = false;
                     try {
                         job = _c;
-                        if (((_d = job.tags) === null || _d === void 0 ? void 0 : _d.startedBy) === startedBy && job.name) {
-                            core.debug("Deleting job ".concat(job.name));
-                            prunes.push(acaClient.jobs.beginDelete(resourceGroup, job.name));
+                        core.debug("Checking job ".concat(job.name, ". Tag startedBy=").concat((_d = job.tags) === null || _d === void 0 ? void 0 : _d.startedBy));
+                        if (((_e = job.tags) === null || _e === void 0 ? void 0 : _e.startedBy) === startedBy && job.name) {
+                            prunes.push(removeTemporaryJob(resourceGroup, job.name));
                         }
                     }
                     finally {
-                        _e = true;
+                        _f = true;
                     }
-                    _f.label = 4;
+                    _g.label = 4;
                 case 4: return [3 /*break*/, 2];
                 case 5: return [3 /*break*/, 12];
                 case 6:
-                    e_1_1 = _f.sent();
+                    e_1_1 = _g.sent();
                     e_1 = { error: e_1_1 };
                     return [3 /*break*/, 12];
                 case 7:
-                    _f.trys.push([7, , 10, 11]);
-                    if (!(!_e && !_a && (_b = jobs_1.return))) return [3 /*break*/, 9];
+                    _g.trys.push([7, , 10, 11]);
+                    if (!(!_f && !_a && (_b = jobs_1.return))) return [3 /*break*/, 9];
                     return [4 /*yield*/, _b.call(jobs_1)];
                 case 8:
-                    _f.sent();
-                    _f.label = 9;
+                    _g.sent();
+                    _g.label = 9;
                 case 9: return [3 /*break*/, 11];
                 case 10:
                     if (e_1) throw e_1.error;
                     return [7 /*endfinally*/];
                 case 11: return [7 /*endfinally*/];
-                case 12: return [2 /*return*/];
+                case 12: return [4 /*yield*/, Promise.all(prunes)];
+                case 13:
+                    _g.sent();
+                    core.debug("Cleaned up ".concat(prunes.length, " jobs"));
+                    return [2 /*return*/];
             }
         });
     });
 }
 exports.pruneTask = pruneTask;
+function removeTemporaryJob(resourceGroupName, jobName) {
+    return __awaiter(this, void 0, void 0, function () {
+        return __generator(this, function (_a) {
+            core.debug("Removing job ".concat(jobName, " from resource group ").concat(resourceGroupName));
+            return [2 /*return*/, acaClient.jobs.beginDeleteAndWait(resourceGroupName, jobName)];
+        });
+    });
+}
+exports.removeTemporaryJob = removeTemporaryJob;
 
 
 /***/ }),
@@ -33289,7 +33323,6 @@ function writeEntryPointScript(workingDirectory, entryPoint, entryPointArgs, pre
         }
         environmentPrefix = "env ".concat(envBuffer.join(' '), " ");
     }
-    // As ECS doesn't return/handle script status with exec command, printing that to output for parsing
     var content = "#!/bin/sh -l\n".concat(exportPath, "\ncd ").concat(workingDirectory, " && exec ").concat(environmentPrefix, " ").concat(entryPoint, " ").concat((entryPointArgs === null || entryPointArgs === void 0 ? void 0 : entryPointArgs.length) ? entryPointArgs.join(' ') : '', "\n");
     var jobId = (0, uuid_1.v1)();
     var filename = "".concat(jobId, ".sh");
@@ -33553,7 +33586,7 @@ function waitForJobCompletion(jobId) {
                     });
                     core.debug("Waiting for job ".concat(jobId, " to complete (waiting for file ").concat(waitedFile, ")"));
                     return [2 /*return*/, new Promise(function (resolve) {
-                            (0, timers_1.setInterval)(function () { return __awaiter(_this, void 0, void 0, function () {
+                            var timer = (0, timers_1.setInterval)(function () { return __awaiter(_this, void 0, void 0, function () {
                                 return __generator(this, function (_a) {
                                     switch (_a.label) {
                                         case 0:
@@ -33562,6 +33595,7 @@ function waitForJobCompletion(jobId) {
                                             return [4 /*yield*/, tailer.quit()];
                                         case 1:
                                             _a.sent();
+                                            clearInterval(timer);
                                             resolve((0, fs_1.readFileSync)(waitedFile, { encoding: 'utf-8' }));
                                             _a.label = 2;
                                         case 2: return [2 /*return*/];
@@ -33658,11 +33692,19 @@ module.exports = require("net");
 
 /***/ }),
 
-/***/ 7561:
+/***/ 6005:
 /***/ ((module) => {
 
 "use strict";
-module.exports = require("node:fs");
+module.exports = require("node:crypto");
+
+/***/ }),
+
+/***/ 3977:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("node:fs/promises");
 
 /***/ }),
 
