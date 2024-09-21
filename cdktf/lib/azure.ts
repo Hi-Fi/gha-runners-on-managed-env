@@ -2,7 +2,7 @@ import { AzurermProvider } from "@cdktf/provider-azurerm/lib/provider";
 import { AzapiProvider } from '../.gen/providers/azapi/provider'
 import { Resource } from '../.gen/providers/azapi/resource'
 import { DataAzapiResourceAction } from '../.gen/providers/azapi/data-azapi-resource-action'
-import { Fn, TerraformLocal, TerraformStack, TerraformVariable } from "cdktf";
+import { CloudBackend, Fn, NamedCloudWorkspace, TerraformStack, TerraformVariable } from "cdktf";
 import { Construct } from "constructs";
 import { ResourceGroup } from "@cdktf/provider-azurerm/lib/resource-group";
 import { ContainerRegistry } from "@cdktf/provider-azurerm/lib/container-registry";
@@ -14,11 +14,18 @@ import { DataAzurermSubscription } from "@cdktf/provider-azurerm/lib/data-azurer
 import { ContainerApp } from "@cdktf/provider-azurerm/lib/container-app";
 import { commonVariables } from "./variables";
 import { ContainerAppEnvironmentStorage } from "@cdktf/provider-azurerm/lib/container-app-environment-storage";
+import { RandomProvider } from "@cdktf/provider-random/lib/provider";
+import { StringResource } from "@cdktf/provider-random/lib/string-resource";
 
 export class Azure extends TerraformStack {
     constructor(scope: Construct, id: string) {
         super(scope, id);
 
+        new CloudBackend(this, {
+            organization: 'hi-fi_org',
+            workspaces: new NamedCloudWorkspace(id)
+        })
+        
         new AzurermProvider(this, 'azurerm', {
             features: [
                 {}
@@ -27,6 +34,8 @@ export class Azure extends TerraformStack {
 
         new AzapiProvider(this, 'azapi', {
         })
+
+        new RandomProvider(this, 'random')
 
         const sub = new DataAzurermSubscription(this, 'sub', {});
 
@@ -50,9 +59,15 @@ export class Azure extends TerraformStack {
             }
         });
 
+        const random = new StringResource(this, 'randomSuffix', {
+            length: 6,
+            special: false,
+            upper: false,
+        })
+
         const acr = new ContainerRegistry(this, 'acr', {
             location,
-            name: 'runnerexampleacr',
+            name: `runneracr${random.result}`,
             resourceGroupName: rg.name,
             sku: 'Basic',
             lifecycle: {
@@ -63,18 +78,6 @@ export class Azure extends TerraformStack {
         });
 
         // use caching for images
-        const kanikoCache = new Resource(this, 'kanikoCache', {
-            type: 'Microsoft.ContainerRegistry/registries/cacheRules@2023-01-01-preview',
-            parentId: acr.id,
-            name: 'kaniko-cache',
-            body: {
-                properties: {
-                    sourceRepository: 'gcr.io/kaniko-project/executor',
-                    targetRepository: 'kaniko'
-                }
-            }
-        })
-
         const runnerCache = new Resource(this, 'runnerCache', {
             type: 'Microsoft.ContainerRegistry/registries/cacheRules@2023-01-01-preview',
             parentId: acr.id,
@@ -131,7 +134,7 @@ export class Azure extends TerraformStack {
             type: 'Microsoft.Storage/storageAccounts@2023-01-01',
             parentId: rg.id,
             location,
-            name: 'ghaexamplestorageaccount',
+            name: `ghastorageaccount${random.result}`,
             body: {
                 properties: {
                     largeFileSharesState: 'Enabled'
@@ -207,11 +210,17 @@ export class Azure extends TerraformStack {
             type: 'Microsoft.Storage/storageAccounts@2023-01-01',
             action: 'listKeys',
             resourceId: storageAccount.id,
-            responseExportValues: ['*']
+            responseExportValues: ['*'],
+            dependsOn: [
+                storageAccount
+            ]
         });
 
         // see https://github.com/hashicorp/terraform-cdk/issues/1641
-        const accessKey = Fn.lookup(Fn.element(Fn.lookup(Fn.jsondecode(storageAccessKey.output as any), 'keys'), 0), 'value')
+        // For older Azapi way to get key would be this when (default) data output was json. Witn 2.0.0-beta default was changed to HCL
+        // const accessKey = Fn.lookup(Fn.element(Fn.lookup(Fn.jsondecode(storageAccessKey.output as any), 'keys'), 0), 'value')
+
+        const accessKey = Fn.lookup(Fn.element(Fn.element(storageAccessKey.output.lookup('0'), 0), 0), 'value')
 
         const acaEnvStorage = new ContainerAppEnvironmentStorage(this, 'acaenvstorage', {
             name: 'gharunnerjobstorage',
@@ -237,112 +246,6 @@ export class Azure extends TerraformStack {
                 // Name doesn't create dependsOn requirement, so adding that explicitly
                 externalsShare
             ] 
-        });
-        
-
-        // Have to use Terraform local variable as trying to use jsonencode directly would fail.
-        const dockerConfig = new TerraformLocal(this, 'dockerConfig', {
-            credHelpers: {
-                [acr.loginServer]: 'acr-env'
-            }
-        });
-
-        // TODO: Images through caching: https://techcommunity.microsoft.com/t5/apps-on-azure-blog/announcing-public-preview-of-caching-for-acr/ba-p/3744655
-        const kanikoJob = new Resource(this, 'kanikoJob', {
-            type: 'Microsoft.App/jobs@2023-05-01',
-            name: 'kaniko-job-01',
-            parentId: rg.id,
-            location,
-            identity: [
-                {
-                    type: 'UserAssigned',
-                    identityIds: [
-                        identity.id
-                    ]
-                }
-            ],
-            body: {
-                properties: {
-                    configuration: {
-                        manualTriggerConfig: {
-                            parallelism: 1,
-                            replicaCompletionCount: 1
-                        },
-                        registries: [
-                            {
-                                identity: identity.id,
-                                server: acr.loginServer
-                            }
-                        ],
-                        triggerType: 'Manual',
-                        replicaTimeout: 1200,
-                        secrets: [
-                            {
-                                name: 'docker-config',
-                                value: Fn.jsonencode(dockerConfig.expression)
-                            }
-                        ]
-                    },
-                    environmentId: environment.id,
-                    template: {
-                        containers: [
-                            {
-                                args: [
-                                    '--dockerfile=images/Dockerfile.gha',
-                                    '--context=git://github.com/Hi-Fi/gha-runners-on-managed-env.git',
-                                    `--destination=${acr.loginServer}/results:latest`,
-                                    '--target=root'
-                                ],
-                                image: `${acr.loginServer}/kaniko:v1.23.0`,
-                                name: 'main',
-                                resources: {
-                                    cpu: 1,
-                                    memory: '2Gi'
-                                },
-                                env: [
-                                    // https://github.com/microsoft/azure-container-apps/issues/502#issuecomment-1340225438
-                                    {
-                                        name: 'APPSETTING_WEBSITE_SITE_NAME',
-                                        value: 'identity-workaround'
-                                    },
-                                    // https://github.com/microsoft/azure-container-apps/issues/442#issuecomment-1665621031
-                                    {
-                                        name: 'AZURE_CLIENT_ID',
-                                        value: identity.clientId
-                                    }
-                                ],
-                                volumeMounts: [
-                                    {
-                                        mountPath: '/kaniko/.docker/config.json',
-                                        subPath: 'config.json',
-                                        volumeName: 'dockerconfig'
-                                    }
-                                ]
-                            }
-                        ],
-                        volumes: [
-                            {
-                                name: 'dockerconfig',
-                                secrets: [
-                                    {
-                                        secretRef: 'docker-config',
-                                        path: 'config.json'
-                                    }
-                                ],
-                                storageType: 'Secret'
-                            }
-                        ]
-                    }
-                }
-            },
-            dependsOn: [
-                kanikoCache
-            ],
-            lifecycle: {
-                ignoreChanges: [
-                    'tags'
-                ]
-            }
         });
 
         const runnerVolumeName = 'work'
@@ -412,11 +315,6 @@ export class Azure extends TerraformStack {
                                     {
                                         name: 'AZURE_CLIENT_ID',
                                         value: identity.clientId
-                                    },
-                                    // Variables so that no hardcoded values or extra calls to APIs needed
-                                    {
-                                        name: 'JOB_NAME',
-                                        value: kanikoJob.name
                                     },
                                     {
                                         name: 'RG_NAME',
@@ -525,7 +423,7 @@ export class Azure extends TerraformStack {
                                 value: rg.name
                             },
                             {
-                                name: 'APP_NAME',
+                                name: 'JOB_NAME',
                                 value: ghaRunnerJob.name
                             },
                             {
@@ -551,7 +449,7 @@ export class Azure extends TerraformStack {
          * @see https://github.com/microsoft/azure-container-apps/issues/1024
          */
         const role = new RoleDefinition(this, 'jobRole', {
-            name: `${sub.subscriptionId}-gha-example-revision-start-role`,
+            name: `gha-example-revision-start-role-${random.result}`,
             scope: sub.id,
             permissions: [
                 {
@@ -566,7 +464,7 @@ export class Azure extends TerraformStack {
         })
 
         const jobCreationRole = new RoleDefinition(this, 'jobCreationRole', {
-            name: `${sub.subscriptionId}-gha-example-revision-create-role`,
+            name: `gha-example-revision-create-role-${random.result}`,
             scope: sub.id,
             permissions: [
                 {
@@ -588,13 +486,6 @@ export class Azure extends TerraformStack {
             scope: ghaRunnerJob.id,
             roleDefinitionId: role.roleDefinitionResourceId
         })
-
-        // Allow starting of the job
-        new RoleAssignment(this, 'jobStartRoleAssignment', {
-            principalId: identity.principalId,
-            scope: kanikoJob.id,
-            roleDefinitionId: role.roleDefinitionResourceId
-        });
 
         // Allow runner to start the job. As each one created new job, have to give to RG level.
         new RoleAssignment(this, 'actionContainerStartRoleAssignment', {

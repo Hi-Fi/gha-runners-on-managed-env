@@ -14,7 +14,7 @@ import { CloudBackend, Fn, NamedCloudWorkspace, TerraformIterator, TerraformStac
 import { Construct } from 'constructs';
 import { commonVariables } from './variables';
 import { EfsFileSystem } from '@cdktf/provider-aws/lib/efs-file-system';
-import { ContainerDefinition } from '@aws-sdk/client-ecs'
+import { type ContainerDefinition } from '@aws-sdk/client-ecs'
 import { EfsMountTarget } from '@cdktf/provider-aws/lib/efs-mount-target';
 
 

@@ -4,7 +4,7 @@
   "projectId": "6d8d3ea9-c622-4fdf-b10d-e95caa7779bd",
   "sendCrashReports": "false",
   "terraformProviders": [
-    "azure/azapi@~> 1.13"
+    "azure/azapi@2.0.0-beta"
   ],
   "terraformModules": [],
   "context": {}
