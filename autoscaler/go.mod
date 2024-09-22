@@ -1,6 +1,6 @@
 module github.com/hi-fi/gha-runners-on-managed-env/autoscaler
 
-go 1.21.3
+go 1.23.1
 
 require (
 	cloud.google.com/go/run v1.3.7
