@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/actions/actions-runner-controller/github/actions"
 	"github.com/google/uuid"
@@ -79,7 +80,10 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 
 	var lastMessageId int64 = 0
 
+	var loopStartTime int64 = 0
+
 	for {
+		loopStartTime = time.Now().Unix()
 		select {
 		case <-asc.ctx.Done():
 			asc.logger.Info("service is stopped.")
@@ -88,6 +92,10 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 			// Latest released version doesn't allow fetching more than one message at the time diretly. Building code for that as PoC.
 			message, _ := asc.Client.GetMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, lastMessageId)
 			if message == nil {
+				// Restart autoscaler if empty message is received too quicly. Long polling should keep polling open around a minute in normal case
+				if time.Now().Unix()-loopStartTime < 2 {
+					return fmt.Errorf("long polling doesn't work, restart needed")
+				}
 				continue
 			}
 			if message.MessageType != "RunnerScaleSetJobMessages" {
