@@ -21,13 +21,9 @@ FROM ghcr.io/actions/actions-runner:latest as base
 # Copy next to other externals so gets copied at same go
 COPY --from=builder /out/executor /home/runner/externals/executor
 
-USER root
-
-ENV RUNNER_ALLOW_RUNASROOT=true
-
 # Calculate hash of externals to prevent need to copy those every time when using shared location for those
 RUN find /home/runner/externals -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum > /home/runner/externals/externals.sum
 
-COPY ./images/hooks/aca/index.js /home/runner/aca/index.js
+COPY ./images/hooks/ecs/index.js /home/runner/ecs/index.js
 
-ENV ACTIONS_RUNNER_CONTAINER_HOOKS=/home/runner/aca/index.js
+ENV ACTIONS_RUNNER_CONTAINER_HOOKS=/home/runner/ecs/index.js

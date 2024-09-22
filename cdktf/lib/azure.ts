@@ -1,10 +1,10 @@
 import { AzurermProvider } from "@cdktf/provider-azurerm/lib/provider";
 import { AzapiProvider } from '../.gen/providers/azapi/provider'
 import { Resource } from '../.gen/providers/azapi/resource'
-import { Fn, TerraformLocal, TerraformStack, TerraformVariable } from "cdktf";
+import { DataAzapiResourceAction } from '../.gen/providers/azapi/data-azapi-resource-action'
+import { CloudBackend, Fn, NamedCloudWorkspace, TerraformStack, TerraformVariable } from "cdktf";
 import { Construct } from "constructs";
 import { ResourceGroup } from "@cdktf/provider-azurerm/lib/resource-group";
-import { ContainerAppEnvironment } from "@cdktf/provider-azurerm/lib/container-app-environment";
 import { ContainerRegistry } from "@cdktf/provider-azurerm/lib/container-registry";
 import { UserAssignedIdentity } from "@cdktf/provider-azurerm/lib/user-assigned-identity";
 import { RoleAssignment } from "@cdktf/provider-azurerm/lib/role-assignment";
@@ -13,17 +13,29 @@ import { RoleDefinition } from "@cdktf/provider-azurerm/lib/role-definition";
 import { DataAzurermSubscription } from "@cdktf/provider-azurerm/lib/data-azurerm-subscription";
 import { ContainerApp } from "@cdktf/provider-azurerm/lib/container-app";
 import { commonVariables } from "./variables";
+import { ContainerAppEnvironmentStorage } from "@cdktf/provider-azurerm/lib/container-app-environment-storage";
+import { RandomProvider } from "@cdktf/provider-random/lib/provider";
+import { StringResource } from "@cdktf/provider-random/lib/string-resource";
 
 export class Azure extends TerraformStack {
     constructor(scope: Construct, id: string) {
         super(scope, id);
 
+        new CloudBackend(this, {
+            organization: 'hi-fi_org',
+            workspaces: new NamedCloudWorkspace(id)
+        })
+        
         new AzurermProvider(this, 'azurerm', {
-            features: {}
+            features: [
+                {}
+            ]
         })
 
         new AzapiProvider(this, 'azapi', {
         })
+
+        new RandomProvider(this, 'random')
 
         const sub = new DataAzurermSubscription(this, 'sub', {});
 
@@ -47,9 +59,15 @@ export class Azure extends TerraformStack {
             }
         });
 
+        const random = new StringResource(this, 'randomSuffix', {
+            length: 6,
+            special: false,
+            upper: false,
+        })
+
         const acr = new ContainerRegistry(this, 'acr', {
             location,
-            name: 'runnerexampleacr',
+            name: `runneracr${random.result}`,
             resourceGroupName: rg.name,
             sku: 'Basic',
             lifecycle: {
@@ -60,22 +78,10 @@ export class Azure extends TerraformStack {
         });
 
         // use caching for images
-        const kanikoCache = new Resource(this, 'kanikoCache', {
-            type: 'Microsoft.ContainerRegistry/registries/cacheRules@2023-01-01-preview',
-            parentId: acr.id,
-            name: 'kaniko-cache',
-            body: {
-                properties: {
-                    sourceRepository: 'gcr.io/kaniko-project/executor',
-                    targetRepository: 'kaniko'
-                }
-            }
-        })
-
         const runnerCache = new Resource(this, 'runnerCache', {
             type: 'Microsoft.ContainerRegistry/registries/cacheRules@2023-01-01-preview',
             parentId: acr.id,
-            name: 'runner-cache',
+            name: 'root-runner-cache',
             body: {
                 properties: {
                     sourceRepository: 'ghcr.io/hi-fi/root-actions-runner',
@@ -124,150 +130,132 @@ export class Azure extends TerraformStack {
             }
         })
 
-        const environment = new ContainerAppEnvironment(this, 'acaenv', {
-            location,
-            name: 'gha-runner-job-environment',
-            resourceGroupName: rg.name,
-            logAnalyticsWorkspaceId: log.id,
-            lifecycle: {
-                ignoreChanges: [
-                    'tags'
-                ]
-            }
-        });
-
-        new ContainerAppEnvironment(this, 'test', {
-            location,
-            name: 'workload-test-env',
-            resourceGroupName: rg.name,
-            workloadProfile: [
-                {
-                    name: 'Consumption',
-                    workloadProfileType: 'Consumption'
-
-                }
-            ],
-            logAnalyticsWorkspaceId: log.id,
-            lifecycle: {
-                ignoreChanges: [
-                    'tags'
-                ]
-            }
-        })
-
-        // Have to use Terraform local variable as trying to use jsonencode directly would fail.
-        const dockerConfig = new TerraformLocal(this, 'dockerConfig', {
-            credHelpers: {
-                [acr.loginServer]: 'acr-env'
-            }
-        });
-
-        // TODO: Images through caching: https://techcommunity.microsoft.com/t5/apps-on-azure-blog/announcing-public-preview-of-caching-for-acr/ba-p/3744655
-        const kanikoJob = new Resource(this, 'kanikoJob', {
-            type: 'Microsoft.App/jobs@2023-05-01',
-            name: 'kaniko-job-01',
+        const storageAccount = new Resource(this, 'storageAccount', {
+            type: 'Microsoft.Storage/storageAccounts@2023-01-01',
             parentId: rg.id,
             location,
-            identity: [
-                {
-                    type: 'UserAssigned',
-                    identityIds: [
-                        identity.id
-                    ]
-                }
-            ],
+            name: `ghastorageaccount${random.result}`,
             body: {
                 properties: {
-                    configuration: {
-                        manualTriggerConfig: {
-                            parallelism: 1,
-                            replicaCompletionCount: 1
-                        },
-                        registries: [
-                            {
-                                identity: identity.id,
-                                server: acr.loginServer
-                            }
-                        ],
-                        triggerType: 'Manual',
-                        replicaTimeout: 1200,
-                        secrets: [
-                            {
-                                name: 'docker-config',
-                                value: Fn.jsonencode(dockerConfig.expression)
-                            }
-                        ]
-                    },
-                    environmentId: environment.id,
-                    template: {
-                        containers: [
-                            {
-                                args: [
-                                    '--dockerfile=images/Dockerfile.gha',
-                                    '--context=git://github.com/Hi-Fi/gha-runners-on-managed-env.git',
-                                    `--destination=${acr.loginServer}/results:latest`,
-                                    '--target=root'
-                                ],
-                                image: `${acr.loginServer}/kaniko:v1.23.0`,
-                                name: 'main',
-                                resources: {
-                                    cpu: 1,
-                                    memory: '2Gi'
-                                },
-                                env: [
-                                    // https://github.com/microsoft/azure-container-apps/issues/502#issuecomment-1340225438
-                                    {
-                                        name: 'APPSETTING_WEBSITE_SITE_NAME',
-                                        value: 'identity-workaround'
-                                    },
-                                    // https://github.com/microsoft/azure-container-apps/issues/442#issuecomment-1665621031
-                                    {
-                                        name: 'AZURE_CLIENT_ID',
-                                        value: identity.clientId
-                                    }
-                                ],
-                                volumeMounts: [
-                                    {
-                                        mountPath: '/kaniko/.docker/config.json',
-                                        subPath: 'config.json',
-                                        volumeName: 'dockerconfig'
-                                    }
-                                ]
-                            }
-                        ],
-                        volumes: [
-                            {
-                                name: 'dockerconfig',
-                                secrets: [
-                                    {
-                                        secretRef: 'docker-config',
-                                        path: 'config.json'
-                                    }
-                                ],
-                                storageType: 'Secret'
-                            }
-                        ]
-                    }
+                    largeFileSharesState: 'Enabled'
+                },
+                sku: {
+                    name: 'Standard_LRS'
+                },
+                kind: 'StorageV2',
+            },
+            lifecycle: {
+                ignoreChanges: [
+                    'tags'
+                ]
+            },
+            responseExportValues: [
+
+            ]
+        });
+
+        const storageShare = new Resource(this, 'storageShare', {
+            type: 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-01-01',
+            name: 'ghaexampleshare',
+            parentId: `${storageAccount.id}/fileServices/default`,
+            body: {
+                properties: {
+                    enabledProtocols: 'SMB',
                 }
             },
-            dependsOn: [
-                kanikoCache
-            ],
+        });
+
+        const externalsShare = new Resource(this, 'externalsShare', {
+            type: 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-01-01',
+            name: 'ghaexternalsshare',
+            parentId: `${storageAccount.id}/fileServices/default`,
+            body: {
+                properties: {
+                    enabledProtocols: 'SMB',
+                }
+            },
+        });
+
+        const environment = new Resource(this, 'acaenv', {
+            type: 'Microsoft.App/managedEnvironments@2024-03-01',
+            parentId: rg.id,
+            location,
+            name: 'gha-runner-environment',
+            body: {
+                properties: {
+                    appLogsConfiguration: {
+                        destination: 'log-analytics',
+                        logAnalyticsConfiguration: {
+                            customerId: log.workspaceId,
+                            sharedKey: log.primarySharedKey,
+                        }
+                    },
+                    infrastructureResourceGroup: 'managed-aca-rg',
+                    workloadProfiles: [
+                        {
+                            name: 'Consumption',
+                            workloadProfileType: 'Consumption'
+                        }
+                    ]
+                }
+            },
             lifecycle: {
                 ignoreChanges: [
                     'tags'
                 ]
             }
         });
+
+        const storageAccessKey = new DataAzapiResourceAction(this, 'storageAccessKeys', {
+            type: 'Microsoft.Storage/storageAccounts@2023-01-01',
+            action: 'listKeys',
+            resourceId: storageAccount.id,
+            responseExportValues: ['*'],
+            dependsOn: [
+                storageAccount
+            ]
+        });
+
+        // see https://github.com/hashicorp/terraform-cdk/issues/1641
+        // For older Azapi way to get key would be this when (default) data output was json. Witn 2.0.0-beta default was changed to HCL
+        // const accessKey = Fn.lookup(Fn.element(Fn.lookup(Fn.jsondecode(storageAccessKey.output as any), 'keys'), 0), 'value')
+
+        const accessKey = Fn.lookup(Fn.element(Fn.element(storageAccessKey.output.lookup('0'), 0), 0), 'value')
+
+        const acaEnvStorage = new ContainerAppEnvironmentStorage(this, 'acaenvstorage', {
+            name: 'gharunnerjobstorage',
+            accessKey,
+            accessMode: 'ReadWrite',
+            accountName: storageAccount.name,
+            containerAppEnvironmentId: environment.id,
+            shareName: storageShare.name,
+            dependsOn: [
+                // Name doesn't create dependsOn requirement, so adding that explicitly
+                storageShare
+            ] 
+        });
+
+        const acaExternalStorage = new ContainerAppEnvironmentStorage(this, 'acaexternalstorage', {
+            name: 'gharunnerexternalstorage',
+            accessKey,
+            accessMode: 'ReadWrite',
+            accountName: storageAccount.name,
+            containerAppEnvironmentId: environment.id,
+            shareName: externalsShare.name,
+            dependsOn: [
+                // Name doesn't create dependsOn requirement, so adding that explicitly
+                externalsShare
+            ] 
+        });
+
+        const runnerVolumeName = 'work'
+        const externalVolumeName = 'externals'
 
         /**
          * @see https://learn.microsoft.com/en-us/azure/templates/microsoft.app/jobs?pivots=deployment-language-terraform
          */
-        const ghaJob = new Resource(this, 'ghaJob', {
-            type: 'Microsoft.App/jobs@2023-05-01',
-            name: 'gha-runner-job-01',
-            parentId: rg.id,
-            location,
+        const ghaRunnerJob = new Resource(this, 'ghaRunnerJob', {
+            type: 'Microsoft.App/jobs@2024-02-02-preview',
             identity: [
                 {
                     type: 'UserAssigned',
@@ -276,45 +264,48 @@ export class Azure extends TerraformStack {
                     ]
                 }
             ],
+            name: 'gha-runner-job-01',
+            parentId: rg.id,
+            location,
             body: {
                 properties: {
                     configuration: {
                         manualTriggerConfig: {
                             parallelism: 1,
-                            replicaCompletionCount: 1
+                            replicaCompletionCount: 1,
                         },
+                        triggerType: 'Manual',
+                        replicaTimeout: 1200,
                         registries: [
                             {
                                 identity: identity.id,
                                 server: acr.loginServer
                             }
                         ],
-                        triggerType: 'Manual',
-                        secrets: [
-                            {
-                                name: 'github-pat',
-                                value: pat.value
-                            }
-                        ],
-                        replicaTimeout: 1200
                     },
                     environmentId: environment.id,
                     template: {
                         containers: [
                             {
+                                resources: {
+                                    cpu: 1,
+                                    memory: '2Gi',
+                                },
+                                // Have to use custom image as we want to run service as root to be able to install packages
+                                image: `${acr.loginServer}/root-actions-runner:latest`,
+                                name: 'main',
+                                command: ['/bin/sh', '-c', 'export EXECID=$(cat /proc/sys/kernel/random/uuid) && mkdir -p /tmp/_work/$EXECID && ln -s /tmp/_work/$EXECID _work && /home/runner/run.sh ; rm -r /tmp/_work/$EXECID'],
+                                volumeMounts: [
+                                    {
+                                        mountPath: '/tmp/_work',
+                                        volumeName: runnerVolumeName,
+                                    },
+                                    {
+                                        mountPath: '/tmp/externals',
+                                        volumeName: externalVolumeName,
+                                    }
+                                ],
                                 env: [
-                                    {
-                                        name: 'GH_URL',
-                                        value: 'https://github.com/Hi-Fi/gha-runners-on-managed-env'
-                                    },
-                                    {
-                                        name: 'REGISTRATION_TOKEN_API_URL',
-                                        value: 'https://api.github.com/repos/Hi-Fi/gha-runners-on-managed-env/actions/runners/registration-token'
-                                    },
-                                    {
-                                        name: 'GITHUB_PAT',
-                                        secretRef: 'github-pat'
-                                    },
                                     // https://github.com/microsoft/azure-container-apps/issues/502#issuecomment-1340225438
                                     {
                                         name: 'APPSETTING_WEBSITE_SITE_NAME',
@@ -324,11 +315,6 @@ export class Azure extends TerraformStack {
                                     {
                                         name: 'AZURE_CLIENT_ID',
                                         value: identity.clientId
-                                    },
-                                    // Variables so that no hardcoded values or extra calls to APIs needed
-                                    {
-                                        name: 'JOB_NAME',
-                                        value: kanikoJob.name
                                     },
                                     {
                                         name: 'RG_NAME',
@@ -337,16 +323,38 @@ export class Azure extends TerraformStack {
                                     {
                                         name: 'LOG_ID',
                                         value: log.workspaceId
+                                    },
+                                    {
+                                        name: 'STORAGE_NAME',
+                                        value: acaEnvStorage.name
+                                    },
+                                    {
+                                        name: 'EXTERNAL_STORAGE_NAME',
+                                        value: acaExternalStorage.name
+                                    },
+                                    {
+                                        name: 'SUBSCRIPTION_ID',
+                                        value: sub.subscriptionId
+                                    },
+                                    {
+                                        name: 'ACA_ENVIRONMENT_ID',
+                                        value: environment.id
                                     }
                                 ],
-                                command: ['/home/runner/run.sh'],
-                                // Have to use custom image as we want to run service as root to be able to install packages
-                                image: `${acr.loginServer}/root-actions-runner:latest`,
-                                name: 'main',
-                                resources: {
-                                    cpu: 1,
-                                    memory: '2Gi'
-                                },
+                            },
+                        ],
+                        volumes: [
+                            {
+                                name: runnerVolumeName,
+                                storageName: acaEnvStorage.name,
+                                storageType: 'AzureFile',
+                                mountOptions: 'mfsymlinks'
+                            },
+                            {
+                                name: externalVolumeName,
+                                storageName: acaExternalStorage.name,
+                                storageType: 'AzureFile',
+                                mountOptions: 'mfsymlinks'
                             }
                         ]
                     }
@@ -391,7 +399,7 @@ export class Azure extends TerraformStack {
                         // CPU and Memory can be lower with workload profile
                         cpu: 0.25,
                         memory: '0.5Gi',
-                        image: `${acr.loginServer}/autoscaler:azure`,
+                        image: `${acr.loginServer}/autoscaler:test`,
                         name: 'autoscaler',
                         env: [
                             {
@@ -403,6 +411,10 @@ export class Azure extends TerraformStack {
                                 value: githubConfigUrl.value
                             },
                             {
+                                name: 'AZURE_TENANT_ID',
+                                value: sub.tenantId,
+                            },
+                            {
                                 name: 'SUBSCRIPTION_ID',
                                 value: sub.subscriptionId
                             },
@@ -412,12 +424,12 @@ export class Azure extends TerraformStack {
                             },
                             {
                                 name: 'JOB_NAME',
-                                value: ghaJob.name
+                                value: ghaRunnerJob.name
                             },
                             {
                                 name: 'SCALE_SET_NAME',
                                 value: 'aca-runner-set'
-                            }
+                            },
                         ]
                     }
                 ]
@@ -427,7 +439,8 @@ export class Azure extends TerraformStack {
             ],
             lifecycle: {
                 ignoreChanges: [
-                    'tags'
+                    'tags',
+                    'workload_profile_name'
                 ]
             }
         });
@@ -436,7 +449,7 @@ export class Azure extends TerraformStack {
          * @see https://github.com/microsoft/azure-container-apps/issues/1024
          */
         const role = new RoleDefinition(this, 'jobRole', {
-            name: 'job-start-role',
+            name: `gha-example-revision-start-role-${random.result}`,
             scope: sub.id,
             permissions: [
                 {
@@ -450,19 +463,37 @@ export class Azure extends TerraformStack {
             ]
         })
 
-        // Allow autoscaler to start the job
+        const jobCreationRole = new RoleDefinition(this, 'jobCreationRole', {
+            name: `gha-example-revision-create-role-${random.result}`,
+            scope: sub.id,
+            permissions: [
+                {
+                    actions: [
+                        'microsoft.app/jobs/start/action',
+                        'microsoft.app/jobs/stop/action',
+                        'microsoft.app/jobs/read',
+                        'microsoft.app/jobs/write',
+                        'microsoft.app/jobs/executions/read',
+                        'microsoft.app/managedEnvironments/join/action',
+                        'microsoft.app/jobs/delete' // cleanup for jobs
+                    ],
+                }
+            ]
+        })
+
+        // Allow autoscaler to create new revision of app
         new RoleAssignment(this, 'scaleJobRoleAssignment', {
             principalId: autoscalerApp.identity.principalId,
-            scope: ghaJob.id,
+            scope: ghaRunnerJob.id,
             roleDefinitionId: role.roleDefinitionResourceId
         })
 
-        // Allow starting of the job
-        new RoleAssignment(this, 'jobStartRoleAssignment', {
+        // Allow runner to start the job. As each one created new job, have to give to RG level.
+        new RoleAssignment(this, 'actionContainerStartRoleAssignment', {
             principalId: identity.principalId,
-            scope: kanikoJob.id,
-            roleDefinitionId: role.roleDefinitionResourceId
-        });
+            scope: rg.id,
+            roleDefinitionId: jobCreationRole.roleDefinitionResourceId
+        })
 
         new RoleAssignment(this, 'imagePushRoleAssignment', {
             principalId: identity.principalId,

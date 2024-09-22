@@ -1,0 +1,41 @@
+name: Container step example
+on: 
+  workflow_dispatch:
+    inputs:
+      runner:
+        desctiption: Runner to use
+        required: true
+        type: choice
+        options:
+          - ecs-runner-set
+          - aca-runner-set
+          - cr-runner-set
+
+jobs:
+  kaniko-build:
+    name: Build an image with Kaniko
+    runs-on: ${{ github.event.inputs.runner || 'aca-runner-set' }}
+    container:
+      # As we execute things using golang app that executes steps with shell, shell is needed. It's found in debug image.
+      image: gcr.io/kaniko-project/executor:debug
+    permissions:
+      contents: read # read the repository
+    steps:
+      - name: Build container test without pushing
+        run: |
+          # Write config file, uses autentication to also pull GHCR images
+          AUTH=$(echo -n ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }} | base64)
+          echo "{\"auths\": {\"ghcr.io\": {\"auth\": \"${AUTH}\"}}}" > /kaniko/.docker/config.json
+
+          # Configure git
+          export GIT_USERNAME="kaniko-bot"
+          export GIT_PASSWORD="${{ secrets.GITHUB_TOKEN }}" # works for GHEC or GHES container registry
+
+          # Buildcontext contains the repo code even it's not explicitly checked out. Cleaning it out
+          rm -rf /kaniko/buildcontext
+          
+          # Build
+          /kaniko/executor --dockerfile="./images/Dockerfile.aca" \
+            --context="${{ github.repositoryUrl }}#${{ github.ref }}#${{ github.sha }}" \
+            --no-push \
+            --no-push-cache

@@ -25,6 +25,8 @@ Open issue still was left, how this kind of build could be included in GitHub Ac
 | Free tier        | None                                                                                                                          | 180,000 vCPU-seconds and 360,000 GiB-seconds                                                                                                                                                                                                                                                     | 240,000 vCPU-seconds and 450,000 GiB-seconds                                                        |
 | Other notes      |                                                                                                                               | No possibility to `sudo`; resulting error with same image that works with ECS. <br> `sudo: The "no new privileges" flag is set, which prevents sudo from running as root.`<br>`sudo: If sudo is running in a container, you may need to adjust the container configuration to disable the flag.` | Kaniko's DNS resolving doesn't work, but required some `resolv.conf` hacks                          |
 
+All environments can scale the runners using autoscaler app in this repo. Also example deployments use that one.
+
 ## Environment specific documentations
 
 - [AWS](./AWS.md)

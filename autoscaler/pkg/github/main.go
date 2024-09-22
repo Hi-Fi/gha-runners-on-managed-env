@@ -92,6 +92,7 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 			}
 			if message.MessageType != "RunnerScaleSetJobMessages" {
 				asc.logger.Debug(fmt.Sprintf("Skipping message of type %s\n", message.MessageType))
+				asc.logger.Info(message.Body)
 				lastMessageId = message.MessageId
 				continue
 			}

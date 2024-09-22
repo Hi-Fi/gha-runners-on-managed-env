@@ -58,6 +58,14 @@ func (a *Aca) TriggerNewRunners(count int, jitConfig string) (err error) {
 	// Append JIT key to environment variables
 	container := jobDefinition.Properties.Template.Containers[0]
 
+	env := []*armappcontainers.EnvironmentVar{}
+
+	for _, envVar := range container.Env {
+		if *envVar.Name != "ACTIONS_RUNNER_INPUT_JITCONFIG" {
+			env = append(env, envVar)
+		}
+	}
+
 	_, err = a.client.BeginStart(a.ctx, a.resourceGroupName, a.jobName, &armappcontainers.JobsClientBeginStartOptions{
 		Template: &armappcontainers.JobExecutionTemplate{
 			Containers: []*armappcontainers.JobExecutionContainer{
@@ -68,7 +76,7 @@ func (a *Aca) TriggerNewRunners(count int, jitConfig string) (err error) {
 					Command:   container.Command,
 					Args:      container.Args,
 					Env: append(
-						jobDefinition.Properties.Template.Containers[0].Env,
+						env,
 						&armappcontainers.EnvironmentVar{
 							Name:  to.Ptr("ACTIONS_RUNNER_INPUT_JITCONFIG"),
 							Value: &jitConfig,
@@ -77,7 +85,8 @@ func (a *Aca) TriggerNewRunners(count int, jitConfig string) (err error) {
 				},
 			},
 		},
-	})
+	},
+	)
 
 	return err
 }
