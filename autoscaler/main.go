@@ -66,9 +66,6 @@ func main() {
 		logger.Info(fmt.Sprintf("Created scale set %s (ID %x). Runner group id %x", scaleSet.Name, scaleSet.Id, scaleSet.RunnerGroupId))
 	}
 
-	logger.Info(client.Client.ActionsServiceAdminToken)
-	logger.Info(client.Client.ActionsServiceURL)
-
 	if err == nil {
 		client.StartMessagePolling(scaleSet.Id, handler)
 	} else {

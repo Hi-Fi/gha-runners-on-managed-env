@@ -661,8 +661,12 @@ var aca_1 = __nccwpck_require__(6691);
 function cleanupJob() {
     return __awaiter(this, void 0, void 0, function () {
         return __generator(this, function (_a) {
-            (0, aca_1.pruneTask)();
-            return [2 /*return*/];
+            switch (_a.label) {
+                case 0: return [4 /*yield*/, (0, aca_1.pruneTask)()];
+                case 1:
+                    _a.sent();
+                    return [2 /*return*/];
+            }
         });
     });
 }

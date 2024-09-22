@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"os"
 	"strings"
 
@@ -77,21 +76,14 @@ func (e *Ecs) CurrentRunnerCount() (int, error) {
 	return taskCount, err
 }
 
-func (e *Ecs) TriggerNewRunners(count int, jitConfig string) (err error) {
+func (e *Ecs) TriggerNewRunners(jitConfigs []string) (err error) {
 	var errs []error
-	for i := 0; i < int(math.Ceil(float64(count)/10)); i++ {
-		starts := count - 10*i
 
-		if starts > 10 {
-			starts = 10
-		}
-
-		e.logger.Debug(fmt.Sprintf("Triggering %d runners in batch", starts))
+	for _, jitConfig := range jitConfigs {
 
 		input := &ecs.RunTaskInput{
 			StartedBy:      e.starter,
 			TaskDefinition: e.taskDefinitionArn,
-			Count:          aws.Int32(int32(starts)),
 			Cluster:        e.cluster,
 			LaunchType:     types.LaunchTypeFargate,
 			NetworkConfiguration: &types.NetworkConfiguration{
@@ -125,15 +117,17 @@ func (e *Ecs) TriggerNewRunners(count int, jitConfig string) (err error) {
 	return errors.Join(errs...)
 }
 
-func (e *Ecs) NeededRunners(count int, jitConfig string) (err error) {
+func (e *Ecs) NeededRunners(jitConfigs []string) (err error) {
 	currentRunners, err := e.CurrentRunnerCount()
 	if err != nil {
 		return err
 	}
+
+	count := len(jitConfigs)
 	e.logger.Debug(fmt.Sprintf("%d/%d of runners available", currentRunners, count))
 	if count-currentRunners > 0 {
 		e.logger.Debug(fmt.Sprintf("Triggering %d runners", count-currentRunners))
-		return e.TriggerNewRunners(count-currentRunners, jitConfig)
+		return e.TriggerNewRunners(jitConfigs[0 : count-currentRunners])
 	}
 
 	return nil

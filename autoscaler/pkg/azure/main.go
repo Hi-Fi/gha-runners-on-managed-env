@@ -50,7 +50,7 @@ func (a *Aca) CurrentRunnerCount() (int, error) {
 	return 0, fmt.Errorf("not implemented")
 }
 
-func (a *Aca) TriggerNewRunners(count int, jitConfig string) (err error) {
+func (a *Aca) TriggerNewRunners(jitConfigs []string) (err error) {
 	jobDefinition, err := a.client.Get(a.ctx, a.resourceGroupName, a.jobName, nil)
 	if err != nil {
 		return err
@@ -66,32 +66,40 @@ func (a *Aca) TriggerNewRunners(count int, jitConfig string) (err error) {
 		}
 	}
 
-	_, err = a.client.BeginStart(a.ctx, a.resourceGroupName, a.jobName, &armappcontainers.JobsClientBeginStartOptions{
-		Template: &armappcontainers.JobExecutionTemplate{
-			Containers: []*armappcontainers.JobExecutionContainer{
-				{
-					Name:      container.Name,
-					Image:     container.Image,
-					Resources: container.Resources,
-					Command:   container.Command,
-					Args:      container.Args,
-					Env: append(
-						env,
-						&armappcontainers.EnvironmentVar{
-							Name:  to.Ptr("ACTIONS_RUNNER_INPUT_JITCONFIG"),
-							Value: &jitConfig,
-						},
-					),
+	var errorSlice []error
+
+	for _, jitConfig := range jitConfigs {
+
+		var jobStartOptions = &armappcontainers.JobsClientBeginStartOptions{
+			Template: &armappcontainers.JobExecutionTemplate{
+				Containers: []*armappcontainers.JobExecutionContainer{
+					{
+						Name:      container.Name,
+						Image:     container.Image,
+						Resources: container.Resources,
+						Command:   container.Command,
+						Args:      container.Args,
+						Env: append(
+							env,
+							&armappcontainers.EnvironmentVar{
+								Name:  to.Ptr("ACTIONS_RUNNER_INPUT_JITCONFIG"),
+								Value: &jitConfig,
+							},
+						),
+					},
 				},
 			},
-		},
-	},
-	)
+		}
 
-	return err
+		_, err = a.client.BeginStart(a.ctx, a.resourceGroupName, a.jobName, jobStartOptions)
+
+		errorSlice = append(errorSlice, err)
+	}
+
+	return errors.Join(errorSlice...)
 }
 
-func (a *Aca) NeededRunners(count int, jitConfig string) (err error) {
+func (a *Aca) NeededRunners(jitConfigs []string) (err error) {
 	return fmt.Errorf("not implemented")
 
 }

@@ -1,4 +1,4 @@
-FROM golang:1.22.3 as builder
+FROM golang:1.23.1 as builder
 
 # Make static bundle to work with scratch/distroless
 ENV CGO_ENABLED=0

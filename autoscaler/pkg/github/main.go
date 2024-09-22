@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/actions/actions-runner-controller/github/actions"
 	"github.com/google/uuid"
@@ -78,8 +79,11 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 	defer asc.Client.DeleteMessageSession(context.Background(), runnerScaleSetId, session.SessionId)
 
 	var lastMessageId int64 = 0
+
+	var loopStartTime int64 = 0
+
 	for {
-		asc.logger.Debug("waiting for message...")
+		loopStartTime = time.Now().Unix()
 		select {
 		case <-asc.ctx.Done():
 			asc.logger.Info("service is stopped.")
@@ -88,11 +92,14 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 			// Latest released version doesn't allow fetching more than one message at the time diretly. Building code for that as PoC.
 			message, _ := asc.Client.GetMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, lastMessageId)
 			if message == nil {
+				// Restart autoscaler if empty message is received too quicly. Long polling should keep polling open around a minute in normal case
+				if time.Now().Unix()-loopStartTime < 2 {
+					return fmt.Errorf("long polling doesn't work, restart needed")
+				}
 				continue
 			}
 			if message.MessageType != "RunnerScaleSetJobMessages" {
 				asc.logger.Debug(fmt.Sprintf("Skipping message of type %s\n", message.MessageType))
-				asc.logger.Info(message.Body)
 				lastMessageId = message.MessageId
 				continue
 			}
@@ -137,22 +144,25 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 				continue
 			}
 
-			asc.logger.Debug("Getting JIT config")
-			jitConfig, err := asc.Client.GenerateJitRunnerConfig(asc.ctx, &actions.RunnerScaleSetJitRunnerSetting{}, runnerScaleSetId)
+			var jitConfigs []string
+			for range len(requestIds) {
+				jitConfig, _ := asc.Client.GenerateJitRunnerConfig(asc.ctx, &actions.RunnerScaleSetJitRunnerSetting{}, runnerScaleSetId)
+				jitConfigs = append(jitConfigs, jitConfig.EncodedJITConfig)
+			}
 			if err != nil {
 				asc.logger.Warn("Could not get JIT config", slog.Any("err", err))
 				continue
 			}
 
-			err = handler.TriggerNewRunners(1, jitConfig.EncodedJITConfig)
+			jobs, err := asc.Client.AcquireJobs(asc.ctx, runnerScaleSetId, session.MessageQueueAccessToken, requestIds)
 
 			if err == nil {
-				asc.logger.Info("Runners requested succesfully, acquiring jobs message")
-				lastMessageId = message.MessageId
-				jobs, err := asc.Client.AcquireJobs(asc.ctx, runnerScaleSetId, session.MessageQueueAccessToken, requestIds)
+				asc.logger.Info("Jobs acquired succesfully, acquiring runners")
+				err = handler.TriggerNewRunners(jitConfigs)
 				if err == nil {
+					lastMessageId = message.MessageId
 					asc.logger.Info(fmt.Sprintf("Acquired jobs %s, removing message...", strings.Join(strings.Fields(fmt.Sprint(jobs)), ", ")))
-					asc.Client.DeleteMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, message.MessageId)
+					asc.Client.DeleteMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, lastMessageId)
 				}
 
 			} else {

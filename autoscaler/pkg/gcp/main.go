@@ -51,28 +51,37 @@ func (c *Cr) CurrentRunnerCount() (int, error) {
 	return 0, fmt.Errorf("not implemented")
 }
 
-func (c *Cr) TriggerNewRunners(count int, jitConfig string) (err error) {
-	req := &runpb.RunJobRequest{
-		Name: c.jobName,
-		Overrides: &runpb.RunJobRequest_Overrides{
-			ContainerOverrides: []*runpb.RunJobRequest_Overrides_ContainerOverride{
-				{
-					Env: []*runpb.EnvVar{
-						{
-							Name:   "ACTIONS_RUNNER_INPUT_JITCONFIG",
-							Values: &runpb.EnvVar_Value{Value: jitConfig},
+func (c *Cr) TriggerNewRunners(jitConfigs []string) (err error) {
+	var errorSlice []error
+
+	for _, jitConfig := range jitConfigs {
+
+		req := &runpb.RunJobRequest{
+			Name: c.jobName,
+			Overrides: &runpb.RunJobRequest_Overrides{
+				ContainerOverrides: []*runpb.RunJobRequest_Overrides_ContainerOverride{
+					{
+						Env: []*runpb.EnvVar{
+							{
+								Name:   "ACTIONS_RUNNER_INPUT_JITCONFIG",
+								Values: &runpb.EnvVar_Value{Value: jitConfig},
+							},
 						},
 					},
 				},
 			},
-		},
-	}
-	_, err = c.client.RunJob(c.ctx, req)
+		}
 
-	return err
+		_, err = c.client.RunJob(c.ctx, req)
+
+		errorSlice = append(errorSlice, err)
+
+	}
+
+	return errors.Join(errorSlice...)
 }
 
-func (c *Cr) NeededRunners(count int, jitConfig string) (err error) {
+func (c *Cr) NeededRunners(jitConfigs []string) (err error) {
 	return fmt.Errorf("not implemented")
 
 }
