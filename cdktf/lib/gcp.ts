@@ -1,22 +1,34 @@
-import { TerraformLocal, TerraformStack } from "cdktf";
+import { CloudBackend, NamedCloudWorkspace, TerraformLocal, TerraformStack } from "cdktf";
 import { Construct } from "constructs";
 import { GoogleProvider } from '@cdktf/provider-google/lib/provider'
 import { ArtifactRegistryRepository } from "@cdktf/provider-google/lib/artifact-registry-repository";
 import { CloudRunV2Job } from "@cdktf/provider-google/lib/cloud-run-v2-job";
-import { DataGoogleClientConfig } from "@cdktf/provider-google/lib/data-google-client-config";
 import { ProjectIamCustomRole } from "@cdktf/provider-google/lib/project-iam-custom-role";
 import { ServiceAccount } from "@cdktf/provider-google/lib/service-account";
 import { ProjectIamMember } from "@cdktf/provider-google/lib/project-iam-member";
 import { commonVariables } from "./variables";
 import { CloudRunService } from "@cdktf/provider-google/lib/cloud-run-service";
+import { NullProvider } from "@cdktf/provider-null/lib/provider";
+import { Resource } from '@cdktf/provider-null/lib/resource'
 
 export class Gcp extends TerraformStack {
     constructor(scope: Construct, id: string) {
         super(scope, id);
 
-        new GoogleProvider(this, 'google');
+        new CloudBackend(this, {
+            organization: 'hi-fi_org',
+            workspaces: new NamedCloudWorkspace(id)
+        })
 
-        const client = new DataGoogleClientConfig(this, 'client');
+        const location = 'europe-north1';
+        const project = 'gha-runner-example';
+        
+        new GoogleProvider(this, 'google', {
+            project,
+            region: location
+        });
+
+        new NullProvider(this, 'null')
 
         const { pat, githubConfigUrl } = commonVariables(this);
 
@@ -38,10 +50,6 @@ export class Gcp extends TerraformStack {
             accountId: 'gha-runner-job-sa',
         });
 
-        const kanikoSa = new ServiceAccount(this, 'kanikoServiceAccount', {
-            accountId: 'kaniko-job-sa',
-        });
-
         const runnerRole = new ProjectIamCustomRole(this, 'runnerRole', {
             roleId: 'ghaRunnerRole',
             title: 'GHA Runner Role',
@@ -49,6 +57,8 @@ export class Gcp extends TerraformStack {
                 'artifactregistry.dockerimages.get',
                 'artifactregistry.dockerimages.list',
                 'run.jobs.run',
+                'run.jobs.create',
+                'run.jobs.delete',
                 // Needed for waiting
                 'run.executions.get'
             ],
@@ -58,55 +68,41 @@ export class Gcp extends TerraformStack {
 
         new ProjectIamMember(this, 'runnerRoleBinding', {
             member: jobPolicyMember.toString(),
-            project: client.project,
+            project,
             role: runnerRole.id,
         })
 
-        const kanikoPolicyMember = new TerraformLocal(this, 'kanikoMember', `serviceAccount:${kanikoSa.email}`)
-
-        new ProjectIamMember(this, 'kanikoRoleBinding', {
-            member: kanikoPolicyMember.toString(),
-            project: client.project,
-            role: 'roles/artifactregistry.writer',
+        new ProjectIamMember(this, 'runnerRoleBindingStorage', {
+            member: jobPolicyMember.toString(),
+            project,
+            role: 'roles/storage.objectCreator',
         })
+
+        const storageName = 'gha-runner-job-externals';
+        const createBucket = new TerraformLocal(this, 'bucketModification', `CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha storage buckets create gs://${storageName} --project=${project} --location=${location} --uniform-bucket-level-access --enable-hierarchical-namespace`)
+
+        // Hierarchial namespaces can't be enabled with Terraform.
+        const bucketCreation = new Resource(this, 'gcloud', {
+            provisioners: [
+                {
+                    type: "local-exec",
+                    command: createBucket.fqn
+                },
+            ],
+            triggers: {
+                fqn: createBucket.fqn
+            },
+        });
 
         // TODO: check caching https://cloud.google.com/artifact-registry/docs/pull-cached-dockerhub-images
-        const kanikoJob = new CloudRunV2Job(this, 'kanikoJob', {
-            name: 'kaniko-job',
-            location: client.region,
-            template: {
-                template: {
-                    containers: [
-                        {
-                            image: 'gcr.io/kaniko-project/executor:latest',
-                            args: [
-                                '--dockerfile=images/Dockerfile.gha',
-                                '--context=git://github.com/Hi-Fi/gha-runners-on-managed-env.git',
-                                `--destination=${registry.location}-docker.pkg.dev/${client.project}/${registry.repositoryId}/results:latest`,
-                                '--target=nonroot'
-                            ],
-                            resources: {
-                                limits: {
-                                    cpu: '1',
-                                    memory: '2Gi'
-                                }
-                            }
-                        }
-                    ],
-                    maxRetries: 0,
-                    serviceAccount: kanikoSa.email
-                }
-            }
-        })
-
         const runnerJob = new CloudRunV2Job(this, 'ghaJob', {
             name: 'gha-runner-job',
-            location: client.region,
+            location,
             template: {
                 template: {
                     containers: [
                         {
-                            image: `${registry.location}-docker.pkg.dev/${client.project}/${registry.repositoryId}/actions/actions-runner:latest`,
+                            image: `${registry.location}-docker.pkg.dev/${project}/${registry.repositoryId}/actions/actions-runner:latest`,
                             env: [
                                 {
                                     name: 'GH_URL',
@@ -117,16 +113,18 @@ export class Gcp extends TerraformStack {
                                     value: 'https://api.github.com/repos/Hi-Fi/gha-runners-on-managed-env/actions/runners/registration-token'
                                 },
                                 {
-                                    name: 'GITHUB_PAT',
-                                    value: pat.value
-                                },
-                                {
                                     name: 'CLOUDSDK_RUN_REGION',
-                                    value: client.region,
+                                    value: location,
                                 },
                                 {
-                                    name: 'KANIKO_JOB',
-                                    value: kanikoJob.name
+                                    name: 'EXTERNAL_STORAGE_NAME',
+                                    value: storageName,
+                                },
+                            ],
+                            volumeMounts: [
+                                {
+                                    name: 'externals',
+                                    mountPath: '/home/runner/_work/externals'
                                 }
                             ],
                             command: ['/home/runner/run.sh'],
@@ -138,10 +136,21 @@ export class Gcp extends TerraformStack {
                             },
                         }
                     ],
+                    volumes: [
+                        {
+                            name: 'externals',
+                            gcs: {
+                                bucket: storageName
+                            }
+                        }
+                    ],
                     maxRetries: 0,
                     serviceAccount: jobSa.email
                 }
-            }
+            },
+            dependsOn: [
+                bucketCreation
+            ]
         })
 
         const autoscalerSa = new ServiceAccount(this, 'autoscalerServiceAccount', {
@@ -155,19 +164,29 @@ export class Gcp extends TerraformStack {
                 'artifactregistry.dockerimages.get',
                 'artifactregistry.dockerimages.list',
                 'run.jobs.run',
+                'run.jobs.create',
+                'run.jobs.delete',
             ],
         });
 
         const autoscalerPolicyMember = new TerraformLocal(this, 'autoscalerMember', `serviceAccount:${autoscalerSa.email}`)
 
-        new ProjectIamMember(this, 'autoscalerRoleBinding', {
+        // TODO: replace 2 following with more specific ones.
+        new ProjectIamMember(this, 'autoscalerRoleBindingRun', {
             member: autoscalerPolicyMember.toString(),
-            project: client.project,
+            project,
             role: 'roles/run.developer',
         })
 
+
+        new ProjectIamMember(this, 'autoscalerRoleBindingStorage', {
+            member: autoscalerPolicyMember.toString(),
+            project,
+            role: 'roles/storage.admin',
+        })
+
         new CloudRunService(this, 'autoscalerService', {
-            location: client.region,
+            location,
             name: 'gha-autoscaler',
             metadata: {
                 annotations: {
@@ -185,7 +204,7 @@ export class Gcp extends TerraformStack {
                     containerConcurrency: 1,
                     containers: [
                         {
-                            image: `${registry.location}-docker.pkg.dev/${client.project}/${registry.repositoryId}/hi-fi/gha-runners-on-managed-env:gcp`,
+                            image: `${registry.location}-docker.pkg.dev/${project}/${registry.repositoryId}/hi-fi/gha-runners-on-managed-env:gcp`,
                             env: [
                                 {
                                     name: 'PAT',

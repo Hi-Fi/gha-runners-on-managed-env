@@ -25,6 +25,7 @@
     "@cdktf/provider-azurerm": "^13.3.0",
     "@cdktf/provider-github": "14.2.1",
     "@cdktf/provider-google": "14.2.0",
+    "@cdktf/provider-null": "^10.0.1",
     "@cdktf/provider-random": "^11.0.3",
     "cdktf": "^0.20.8",
     "constructs": "^10.3.0"
