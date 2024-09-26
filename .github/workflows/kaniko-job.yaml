@@ -1,4 +1,4 @@
-name: Container step example
+name: Kaniko test job
 on: 
   workflow_dispatch:
     inputs:

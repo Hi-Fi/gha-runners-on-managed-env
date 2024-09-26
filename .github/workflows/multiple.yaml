@@ -1,0 +1,30 @@
+name: Test multiple concurrent starts
+
+# TODO: Release job
+on:
+  push:
+    branches: [cloudrun]
+  workflow_dispatch:
+    inputs:
+      runner:
+        desctiption: Runner to use
+        required: true
+        type: choice
+        options:
+          - ecs-runner-set
+          - aca-runner-set
+          - cr-runner-set
+
+jobs:
+  job1:
+    name: Hello world
+    runs-on: ${{ github.event.inputs.runner || 'cr-runner-set' }}
+    steps:
+      - name: hello
+        run: echo "hello world"
+  job2:
+    name: export
+    runs-on: ${{ github.event.inputs.runner || 'cr-runner-set' }}
+    steps:
+      - name: export
+        run: export
