@@ -94,7 +94,7 @@ func health(w http.ResponseWriter, _ *http.Request) {
 func requireEnv(key string) (value string, err error) {
 	value = os.Getenv(key)
 	if len(value) == 0 {
-		err = fmt.Errorf(fmt.Sprintf("Value required for environment variable %s", key))
+		err = fmt.Errorf("Value required for environment variable %s", key)
 	}
 	return
 }

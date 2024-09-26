@@ -10,6 +10,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/appcontainers/armappcontainers/v2"
+	"github.com/hi-fi/gha-runners-on-managed-env/autoscaler/pkg/github"
 )
 
 type Aca struct {
@@ -50,7 +51,7 @@ func (a *Aca) CurrentRunnerCount() (int, error) {
 	return 0, fmt.Errorf("not implemented")
 }
 
-func (a *Aca) TriggerNewRunners(jitConfigs []string) (err error) {
+func (a *Aca) TriggerNewRunners(runnerConfigurations []github.RunnerConfiguration) (err error) {
 	jobDefinition, err := a.client.Get(a.ctx, a.resourceGroupName, a.jobName, nil)
 	if err != nil {
 		return err
@@ -68,7 +69,7 @@ func (a *Aca) TriggerNewRunners(jitConfigs []string) (err error) {
 
 	var errorSlice []error
 
-	for _, jitConfig := range jitConfigs {
+	for _, runnerConfiguration := range runnerConfigurations {
 
 		var jobStartOptions = &armappcontainers.JobsClientBeginStartOptions{
 			Template: &armappcontainers.JobExecutionTemplate{
@@ -83,7 +84,7 @@ func (a *Aca) TriggerNewRunners(jitConfigs []string) (err error) {
 							env,
 							&armappcontainers.EnvironmentVar{
 								Name:  to.Ptr("ACTIONS_RUNNER_INPUT_JITCONFIG"),
-								Value: &jitConfig,
+								Value: &runnerConfiguration.JitConfig,
 							},
 						),
 					},
@@ -99,9 +100,13 @@ func (a *Aca) TriggerNewRunners(jitConfigs []string) (err error) {
 	return errors.Join(errorSlice...)
 }
 
-func (a *Aca) NeededRunners(jitConfigs []string) (err error) {
+func (a *Aca) NeededRunners(jitConfigs []github.RunnerConfiguration) (err error) {
 	return fmt.Errorf("not implemented")
+}
 
+// No need in Azure
+func (a *Aca) CleanRunners(requestIds []int64) (err error) {
+	return nil
 }
 
 func requireEnv(key string) (value string, err error) {

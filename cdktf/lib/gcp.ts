@@ -60,7 +60,7 @@ export class Gcp extends TerraformStack {
                 'run.jobs.create',
                 'run.jobs.delete',
                 // Needed for waiting
-                'run.executions.get'
+                'run.executions.get',
             ],
         });
 
@@ -75,7 +75,7 @@ export class Gcp extends TerraformStack {
         new ProjectIamMember(this, 'runnerRoleBindingStorage', {
             member: jobPolicyMember.toString(),
             project,
-            role: 'roles/storage.objectCreator',
+            role: 'roles/storage.admin',
         })
 
         const storageName = 'gha-runner-job-externals';
@@ -115,6 +115,10 @@ export class Gcp extends TerraformStack {
                                 {
                                     name: 'CLOUDSDK_RUN_REGION',
                                     value: location,
+                                },
+                                {
+                                    name: 'GOOGLE_CLOUD_PROJECT',
+                                    value: project,
                                 },
                                 {
                                     name: 'EXTERNAL_STORAGE_NAME',

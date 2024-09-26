@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
+	"github.com/hi-fi/gha-runners-on-managed-env/autoscaler/pkg/github"
 )
 
 type Ecs struct {
@@ -76,10 +77,10 @@ func (e *Ecs) CurrentRunnerCount() (int, error) {
 	return taskCount, err
 }
 
-func (e *Ecs) TriggerNewRunners(jitConfigs []string) (err error) {
+func (e *Ecs) TriggerNewRunners(runnerConfigurations []github.RunnerConfiguration) (err error) {
 	var errs []error
 
-	for _, jitConfig := range jitConfigs {
+	for _, runnerConfiguration := range runnerConfigurations {
 
 		input := &ecs.RunTaskInput{
 			StartedBy:      e.starter,
@@ -100,7 +101,7 @@ func (e *Ecs) TriggerNewRunners(jitConfigs []string) (err error) {
 						Environment: []types.KeyValuePair{
 							{
 								Name:  aws.String("ACTIONS_RUNNER_INPUT_JITCONFIG"),
-								Value: &jitConfig,
+								Value: &runnerConfiguration.JitConfig,
 							},
 						},
 					},
@@ -117,19 +118,24 @@ func (e *Ecs) TriggerNewRunners(jitConfigs []string) (err error) {
 	return errors.Join(errs...)
 }
 
-func (e *Ecs) NeededRunners(jitConfigs []string) (err error) {
+func (e *Ecs) NeededRunners(runnerConfigurations []github.RunnerConfiguration) (err error) {
 	currentRunners, err := e.CurrentRunnerCount()
 	if err != nil {
 		return err
 	}
 
-	count := len(jitConfigs)
+	count := len(runnerConfigurations)
 	e.logger.Debug(fmt.Sprintf("%d/%d of runners available", currentRunners, count))
 	if count-currentRunners > 0 {
 		e.logger.Debug(fmt.Sprintf("Triggering %d runners", count-currentRunners))
-		return e.TriggerNewRunners(jitConfigs[0 : count-currentRunners])
+		return e.TriggerNewRunners(runnerConfigurations[0 : count-currentRunners])
 	}
 
+	return nil
+}
+
+// No need in AWS
+func (e *Ecs) CleanRunners(requestIds []int64) (err error) {
 	return nil
 }
 

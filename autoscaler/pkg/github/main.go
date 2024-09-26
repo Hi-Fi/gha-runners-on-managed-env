@@ -20,6 +20,11 @@ type ActionsServiceClient struct {
 	logger *slog.Logger
 }
 
+type RunnerConfiguration struct {
+	JitConfig       string
+	RunnerRequestId int64
+}
+
 func CreateActionsServiceClient(ctx context.Context, pat string, logger *slog.Logger) *ActionsServiceClient {
 	creds := actions.ActionsAuth{
 		Token: pat,
@@ -132,41 +137,72 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 						continue
 					}
 					requestIds = append(requestIds, jobAvailable.RunnerRequestId)
+
+					if len(requestIds) == 0 {
+						continue
+					}
+
+					var runnerConfigurations []RunnerConfiguration
+					for _, requestId := range requestIds {
+						jitConfig, _ := asc.Client.GenerateJitRunnerConfig(asc.ctx, &actions.RunnerScaleSetJitRunnerSetting{}, runnerScaleSetId)
+						runnerConfigurations = append(runnerConfigurations, RunnerConfiguration{
+							JitConfig:       jitConfig.EncodedJITConfig,
+							RunnerRequestId: requestId,
+						})
+					}
+					if err != nil {
+						asc.logger.Warn("Could not get JIT config", slog.Any("err", err))
+						continue
+					}
+
+					jobs, err := asc.Client.AcquireJobs(asc.ctx, runnerScaleSetId, session.MessageQueueAccessToken, requestIds)
+
+					if err == nil {
+						asc.logger.Info("Jobs acquired succesfully, acquiring runners")
+						err = handler.TriggerNewRunners(runnerConfigurations)
+						if err == nil {
+							lastMessageId = message.MessageId
+							asc.logger.Info(fmt.Sprintf("Acquired jobs %s, removing message...", strings.Join(strings.Fields(fmt.Sprint(jobs)), ", ")))
+							asc.Client.DeleteMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, lastMessageId)
+						} else {
+							fmt.Println(err)
+						}
+
+					} else {
+						slog.Error("Triggering new runners faileded", slog.Any("err", err))
+					}
+
+				} else if messageType.MessageType == "JobCompleted" {
+					var jobCompleted actions.JobCompleted
+					if err := json.Unmarshal(rawMessage, &jobCompleted); err != nil {
+						asc.logger.Warn("Failed to unmarshal message to job completed", slog.Any("err", err))
+						lastMessageId = message.MessageId
+						continue
+					}
+					requestIds = append(requestIds, jobCompleted.RunnerRequestId)
+
+					if len(requestIds) == 0 {
+						continue
+					}
+
+					err = handler.CleanRunners(requestIds)
+
+					if err == nil {
+						lastMessageId = message.MessageId
+						asc.logger.Info(fmt.Sprintf("Cleanup done for %s, removing message...", strings.Join(strings.Fields(fmt.Sprint(requestIds)), ", ")))
+
+						asc.Client.DeleteMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, lastMessageId)
+
+					} else {
+						slog.Error("Clening up runners failed", slog.Any("err", err))
+					}
+
 				} else {
 					asc.logger.Debug(fmt.Sprintf("Not parsing message %s", messageType.MessageType))
 					lastMessageId = message.MessageId
 					asc.Client.DeleteMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, message.MessageId)
 					continue
 				}
-			}
-
-			if len(requestIds) == 0 {
-				continue
-			}
-
-			var jitConfigs []string
-			for range len(requestIds) {
-				jitConfig, _ := asc.Client.GenerateJitRunnerConfig(asc.ctx, &actions.RunnerScaleSetJitRunnerSetting{}, runnerScaleSetId)
-				jitConfigs = append(jitConfigs, jitConfig.EncodedJITConfig)
-			}
-			if err != nil {
-				asc.logger.Warn("Could not get JIT config", slog.Any("err", err))
-				continue
-			}
-
-			jobs, err := asc.Client.AcquireJobs(asc.ctx, runnerScaleSetId, session.MessageQueueAccessToken, requestIds)
-
-			if err == nil {
-				asc.logger.Info("Jobs acquired succesfully, acquiring runners")
-				err = handler.TriggerNewRunners(jitConfigs)
-				if err == nil {
-					lastMessageId = message.MessageId
-					asc.logger.Info(fmt.Sprintf("Acquired jobs %s, removing message...", strings.Join(strings.Fields(fmt.Sprint(jobs)), ", ")))
-					asc.Client.DeleteMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, lastMessageId)
-				}
-
-			} else {
-				slog.Error("Triggering new runners faileded", slog.Any("err", err))
 			}
 		}
 	}
