@@ -2,8 +2,6 @@ name: Test multiple concurrent starts
 
 # TODO: Release job
 on:
-  push:
-    branches: [cloudrun]
   workflow_dispatch:
     inputs:
       runner:
