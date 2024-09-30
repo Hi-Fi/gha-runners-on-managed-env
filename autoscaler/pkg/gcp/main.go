@@ -68,6 +68,13 @@ func (c *Cr) CurrentRunnerCount() (int, error) {
 func (c *Cr) TriggerNewRunners(runnerConfigurations []github.RunnerConfiguration) (err error) {
 	var errorSlice []error
 
+	var requestIds []int64
+	for _, runnerConfiguration := range runnerConfigurations {
+		requestIds = append(requestIds, runnerConfiguration.RunnerRequestId)
+	}
+
+	c.logger.Debug("Triggering new runner(s)", slog.Int("count", len(runnerConfigurations)), slog.Any("requestsIds", requestIds))
+
 	// Cloud run doesn't support subpaths in volumes, so have to make bucket for each path needed. Meaning 4 buckets each time, where 1, 3 or 4 can be in use.
 	// We don't know at this point what's going to run on container, so we have to presume for "all"
 	// Mount paths in spawned container:
@@ -108,11 +115,18 @@ func (c *Cr) TriggerNewRunners(runnerConfigurations []github.RunnerConfiguration
 	jobNameSlice := strings.Split(jobFullName, "/")
 	jobParent := strings.Join(jobNameSlice[0:4], "/")
 
+	volumes := job.Template.Template.GetVolumes()
+	mountPaths := job.Template.Template.Containers[0].GetVolumeMounts()
+	environmentVariables := job.Template.Template.Containers[0].GetEnv()
+
 	for _, runnerConfiguration := range runnerConfigurations {
+		var newJob *runpb.Job
+
+		c.logger.Debug("Provding runner for request", slog.Int64("runnerRequestId", runnerConfiguration.RunnerRequestId))
 		newJobName := fmt.Sprintf("%s-%d", c.jobName, runnerConfiguration.RunnerRequestId)
 		// 1 dynamic bucket required for work; other static bucket is used for externals
 		bucket := c.storageClient.Bucket(fmt.Sprintf("gha-runners-cloudrun-work-temp-%d", runnerConfiguration.RunnerRequestId))
-		c.logger.Debug(fmt.Sprintf("Creating bucket %s to project %s", bucket.BucketName(), c.projectId))
+		c.logger.Debug("Creating bucket", slog.String("bucket", bucket.BucketName()), slog.String("project", c.projectId))
 		bucket.Create(c.ctx, c.projectId, &storage.BucketAttrs{
 			StorageClass: "STANDARD",
 			Location:     c.location,
@@ -128,13 +142,13 @@ func (c *Cr) TriggerNewRunners(runnerConfigurations []github.RunnerConfiguration
 			},
 		})
 
-		newJob := &runpb.Job{
+		newJob = &runpb.Job{
 			Template: job.GetTemplate(),
 			Labels:   job.GetLabels(),
 		}
 
 		newJob.Template.Template.Volumes = append(
-			job.Template.Template.GetVolumes(),
+			volumes,
 			&runpb.Volume{
 				Name: "work",
 				VolumeType: &runpb.Volume_Gcs{
@@ -145,17 +159,18 @@ func (c *Cr) TriggerNewRunners(runnerConfigurations []github.RunnerConfiguration
 			},
 		)
 
-		newJob.Template.Template.Containers[0].VolumeMounts = append(
-			newJob.Template.Template.Containers[0].GetVolumeMounts(),
-			// https://github.com/actions/actions-runner-controller/blob/90b68fec1a364e2eb1c784e190022c601bf23ecd/charts/gha-runner-scale-set/templates/_helpers.tpl#L111C16-L111C34
-			&runpb.VolumeMount{
+		newJob.Template.Template.Containers[0].VolumeMounts = append([]*runpb.VolumeMount{
+			{
 				Name:      "work",
 				MountPath: "/home/runner/_work",
 			},
+		},
+			// https://github.com/actions/actions-runner-controller/blob/90b68fec1a364e2eb1c784e190022c601bf23ecd/charts/gha-runner-scale-set/templates/_helpers.tpl#L111C16-L111C34
+			mountPaths...,
 		)
 
 		newJob.Template.Template.Containers[0].Env = append(
-			newJob.Template.Template.Containers[0].Env,
+			environmentVariables,
 			&runpb.EnvVar{
 				Name:   "ACTIONS_RUNNER_INPUT_JITCONFIG",
 				Values: &runpb.EnvVar_Value{Value: runnerConfiguration.JitConfig},
@@ -166,6 +181,10 @@ func (c *Cr) TriggerNewRunners(runnerConfigurations []github.RunnerConfiguration
 			},
 			&runpb.EnvVar{
 				Name:   "WORK_BUCKET_NAME",
+				Values: &runpb.EnvVar_Value{Value: bucket.BucketName()},
+			},
+			&runpb.EnvVar{
+				Name:   "STORAGE_NAME",
 				Values: &runpb.EnvVar_Value{Value: bucket.BucketName()},
 			},
 		)
@@ -220,20 +239,45 @@ func (c *Cr) CleanRunners(requestIds []int64) (err error) {
 		bucketName := fmt.Sprintf("gha-runners-cloudrun-work-temp-%d", requestId)
 		c.logger.Debug(fmt.Sprintf("Removing bucket %s", bucketName))
 		bucket := c.storageClient.Bucket(bucketName)
-		bucket.Delete(c.ctx)
+
+		// We can't remove bucket that has any files in it through SDK, so just setting lifecycle policy to empty buckets at this point
+		// Licecycle rule execution is async operation, so we don't know when it would be done. This is ensuring that if removal of files fails, data is not staying there for a long time
+		bucket.Update(c.ctx, storage.BucketAttrsToUpdate{
+			Lifecycle: &storage.Lifecycle{
+				Rules: []storage.LifecycleRule{
+					{
+						Action: storage.LifecycleAction{
+							Type: storage.DeleteAction,
+						},
+						Condition: storage.LifecycleCondition{
+							AllObjects: true,
+							AgeInDays:  0,
+						},
+					},
+				},
+			},
+		})
+
+		err = bucket.Delete(c.ctx)
+		if err != nil {
+			c.logger.Warn("Removal of bucket failed", slog.String("bucket", bucketName), slog.String("error", err.Error()))
+		}
 
 		jobName := fmt.Sprintf("projects/%s/locations/%s/jobs/%s-%d", c.projectId, c.location, c.jobName, requestId)
 
 		c.logger.Debug(fmt.Sprintf("Removing job %s", jobName))
-		c.client.DeleteJob(c.ctx,
+		_, err = c.client.DeleteJob(c.ctx,
 			&runpb.DeleteJobRequest{
 				Name: jobName,
 			},
 		)
-		c.logger.Debug(fmt.Sprintf("Cleanup donw for request %d", requestId))
+		if err != nil {
+			c.logger.Warn(err.Error())
+		}
+		c.logger.Debug(fmt.Sprintf("Cleanup e for request %d", requestId))
 
 	}
-	// TODO: Remove bucket created for specific request
+
 	return nil
 }
 

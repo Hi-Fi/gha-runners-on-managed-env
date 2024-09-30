@@ -240,7 +240,7 @@ export class Aws extends TerraformStack {
             containerDefinitions: Fn.jsonencode([
                 {
                     name: 'autoscaler',
-                    image: 'ghcr.io/hi-fi/gha-runners-on-managed-env:latest',
+                    image: 'ghcr.io/hi-fi/gha-runners-on-managed-env:test',
                     essential: true,
                     environment: [
                         {

@@ -1,0 +1,20 @@
+[
+    {
+        "messageType": "JobStarted",
+        "runnerId": 1927,
+        "runnerName": "aca-runner-set-Runner-fcadb3c57c",
+        "runnerRequestId": 284,
+        "repositoryName": "gha-runners-on-managed-env",
+        "ownerName": "Hi-Fi",
+        "workflowRunId": 10433331692,
+        "jobWorkflowRef": "Hi-Fi/gha-runners-on-managed-env/.github/workflows/services.yaml@refs/heads/runner_hooks",
+        "jobDisplayName": "container-job",
+        "eventName": "push",
+        "requestLabels": [
+            "aca-runner-set"
+        ],
+        "queueTime": "2024-08-27T18:17:57.78Z",
+        "scaleSetAssignTime": "2024-08-27T18:18:05.51Z",
+        "runnerAssignTime": "2024-08-27T18:21:12.3866667Z"
+    }
+]

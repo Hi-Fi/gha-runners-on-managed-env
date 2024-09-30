@@ -59,6 +59,7 @@ export class Gcp extends TerraformStack {
                 'run.jobs.run',
                 'run.jobs.create',
                 'run.jobs.delete',
+                'run.jobs.list',
                 // Needed for waiting
                 'run.executions.get',
             ],
@@ -76,6 +77,18 @@ export class Gcp extends TerraformStack {
             member: jobPolicyMember.toString(),
             project,
             role: 'roles/storage.admin',
+        })
+
+        new ProjectIamMember(this, 'runnerRoleBindingRunServiceAgent', {
+            member: jobPolicyMember.toString(),
+            project,
+            role: 'roles/run.serviceAgent',
+        })
+
+        new ProjectIamMember(this, 'runnerRoleBindingRunViewer', {
+            member: jobPolicyMember.toString(),
+            project,
+            role: 'roles/run.viewer',
         })
 
         const storageName = 'gha-runner-job-externals';
@@ -96,22 +109,15 @@ export class Gcp extends TerraformStack {
 
         // TODO: check caching https://cloud.google.com/artifact-registry/docs/pull-cached-dockerhub-images
         const runnerJob = new CloudRunV2Job(this, 'ghaJob', {
+            deletionProtection: false,
             name: 'gha-runner-job',
             location,
             template: {
                 template: {
                     containers: [
                         {
-                            image: `${registry.location}-docker.pkg.dev/${project}/${registry.repositoryId}/actions/actions-runner:latest`,
+                            image: `${registry.location}-docker.pkg.dev/${project}/${registry.repositoryId}/hi-fi/actions-runner:cr`,
                             env: [
-                                {
-                                    name: 'GH_URL',
-                                    value: 'https://github.com/Hi-Fi/gha-runners-on-managed-env'
-                                },
-                                {
-                                    name: 'REGISTRATION_TOKEN_API_URL',
-                                    value: 'https://api.github.com/repos/Hi-Fi/gha-runners-on-managed-env/actions/runners/registration-token'
-                                },
                                 {
                                     name: 'CLOUDSDK_RUN_REGION',
                                     value: location,
@@ -124,6 +130,11 @@ export class Gcp extends TerraformStack {
                                     name: 'EXTERNAL_STORAGE_NAME',
                                     value: storageName,
                                 },
+                                // FUSE mounts directory as root with 777 fo directories and 555 for other files. As path is owned always by root, utime or permission change is not possible. These options prevent tar to try those
+                                {
+                                    name: 'TAR_OPTIONS',
+                                    value: '--touch --no-overwrite-dir --no-same-owner'
+                                }
                             ],
                             volumeMounts: [
                                 {
@@ -131,7 +142,7 @@ export class Gcp extends TerraformStack {
                                     mountPath: '/home/runner/_work/externals'
                                 }
                             ],
-                            command: ['/home/runner/run.sh'],
+                            command: ['/home/runner/ephemeral_runner.sh'],
                             resources: {
                                 limits: {
                                     cpu: '1',
@@ -189,6 +200,12 @@ export class Gcp extends TerraformStack {
             role: 'roles/storage.admin',
         })
 
+        new ProjectIamMember(this, 'autoscalerRoleBindingRunServiceAgent', {
+            member: autoscalerPolicyMember.toString(),
+            project,
+            role: 'roles/run.serviceAgent',
+        })
+
         new CloudRunService(this, 'autoscalerService', {
             location,
             name: 'gha-autoscaler',
@@ -202,13 +219,15 @@ export class Gcp extends TerraformStack {
                     annotations: {
                         'autoscaling.knative.dev/maxScale': '1',
                         'autoscaling.knative.dev/minScale': '1',
+                        'run.googleapis.com/cpu-throttling': 'false',
+                        'run.googleapis.com/startup-cpu-boost': 'false'
                     }
                 },
                 spec: {
                     containerConcurrency: 1,
                     containers: [
                         {
-                            image: `${registry.location}-docker.pkg.dev/${project}/${registry.repositoryId}/hi-fi/gha-runners-on-managed-env:gcp`,
+                            image: `${registry.location}-docker.pkg.dev/${project}/${registry.repositoryId}/hi-fi/gha-runners-on-managed-env:test`,
                             env: [
                                 {
                                     name: 'PAT',
@@ -220,17 +239,27 @@ export class Gcp extends TerraformStack {
                                 },
                                 {
                                     name: 'JOB_NAME',
-                                    value: runnerJob.id
+                                    value: runnerJob.name
                                 },
                                 {
                                     name: 'SCALE_SET_NAME',
                                     value: 'cr-runner-set'
+                                },
+                                {
+                                    name: 'CLOUDSDK_RUN_REGION',
+                                    value: location
+                                },
+                                {
+                                    name: 'GOOGLE_CLOUD_PROJECT',
+                                    value: project
                                 }
+
                             ],
                             resources: {
+                                // Service would work for much lower, but these are minimum values for "always on" mode
                                 limits: {
-                                    cpu: '200m',
-                                    memory: '128Mi'
+                                    cpu: '1000m',
+                                    memory: '512Mi'
                                 }
                             }
                         }

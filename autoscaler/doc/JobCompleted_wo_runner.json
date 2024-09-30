@@ -1,0 +1,21 @@
+[
+    {
+        "messageType": "JobCompleted",
+        "runnerId": 0,
+        "runnerName": null,
+        "result": "canceled",
+        "runnerRequestId": 283,
+        "repositoryName": "gha-runners-on-managed-env",
+        "ownerName": "Hi-Fi",
+        "workflowRunId": 10433331692,
+        "jobWorkflowRef": "Hi-Fi/gha-runners-on-managed-env/.github/workflows/services.yaml@refs/heads/runner_hooks",
+        "jobDisplayName": "container-job",
+        "eventName": "push",
+        "requestLabels": [
+            "aca-runner-set"
+        ],
+        "queueTime": "2024-08-27T18:13:04.7966667Z",
+        "scaleSetAssignTime": "2024-08-27T18:13:13.4233333Z",
+        "finishTime": "2024-08-27T18:13:58.2766667Z"
+    }
+]

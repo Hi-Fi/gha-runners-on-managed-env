@@ -7,7 +7,6 @@ import (
 	"log"
 	"log/slog"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/actions/actions-runner-controller/github/actions"
@@ -23,6 +22,11 @@ type ActionsServiceClient struct {
 type RunnerConfiguration struct {
 	JitConfig       string
 	RunnerRequestId int64
+}
+
+type Requests struct {
+	Trigger []RunnerConfiguration
+	Cleanup []int64
 }
 
 func CreateActionsServiceClient(ctx context.Context, pat string, logger *slog.Logger) *ActionsServiceClient {
@@ -119,7 +123,7 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 				}
 			}
 
-			var requestIds []int64
+			var runnerRequests Requests
 			for _, rawMessage := range rawMessages {
 				var messageType actions.JobMessageType
 				if err := json.Unmarshal(rawMessage, &messageType); err != nil {
@@ -136,41 +140,18 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 						lastMessageId = message.MessageId
 						continue
 					}
-					requestIds = append(requestIds, jobAvailable.RunnerRequestId)
 
-					if len(requestIds) == 0 {
-						continue
-					}
+					jitConfig, _ := asc.Client.GenerateJitRunnerConfig(asc.ctx, &actions.RunnerScaleSetJitRunnerSetting{}, runnerScaleSetId)
 
-					var runnerConfigurations []RunnerConfiguration
-					for _, requestId := range requestIds {
-						jitConfig, _ := asc.Client.GenerateJitRunnerConfig(asc.ctx, &actions.RunnerScaleSetJitRunnerSetting{}, runnerScaleSetId)
-						runnerConfigurations = append(runnerConfigurations, RunnerConfiguration{
-							JitConfig:       jitConfig.EncodedJITConfig,
-							RunnerRequestId: requestId,
-						})
-					}
 					if err != nil {
 						asc.logger.Warn("Could not get JIT config", slog.Any("err", err))
 						continue
 					}
 
-					jobs, err := asc.Client.AcquireJobs(asc.ctx, runnerScaleSetId, session.MessageQueueAccessToken, requestIds)
-
-					if err == nil {
-						asc.logger.Info("Jobs acquired succesfully, acquiring runners")
-						err = handler.TriggerNewRunners(runnerConfigurations)
-						if err == nil {
-							lastMessageId = message.MessageId
-							asc.logger.Info(fmt.Sprintf("Acquired jobs %s, removing message...", strings.Join(strings.Fields(fmt.Sprint(jobs)), ", ")))
-							asc.Client.DeleteMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, lastMessageId)
-						} else {
-							fmt.Println(err)
-						}
-
-					} else {
-						slog.Error("Triggering new runners faileded", slog.Any("err", err))
-					}
+					runnerRequests.Trigger = append(runnerRequests.Trigger, RunnerConfiguration{
+						JitConfig:       jitConfig.EncodedJITConfig,
+						RunnerRequestId: jobAvailable.RunnerRequestId,
+					})
 
 				} else if messageType.MessageType == "JobCompleted" {
 					var jobCompleted actions.JobCompleted
@@ -179,23 +160,7 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 						lastMessageId = message.MessageId
 						continue
 					}
-					requestIds = append(requestIds, jobCompleted.RunnerRequestId)
-
-					if len(requestIds) == 0 {
-						continue
-					}
-
-					err = handler.CleanRunners(requestIds)
-
-					if err == nil {
-						lastMessageId = message.MessageId
-						asc.logger.Info(fmt.Sprintf("Cleanup done for %s, removing message...", strings.Join(strings.Fields(fmt.Sprint(requestIds)), ", ")))
-
-						asc.Client.DeleteMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, lastMessageId)
-
-					} else {
-						slog.Error("Clening up runners failed", slog.Any("err", err))
-					}
+					runnerRequests.Cleanup = append(runnerRequests.Cleanup, jobCompleted.RunnerRequestId)
 
 				} else {
 					asc.logger.Debug(fmt.Sprintf("Not parsing message %s", messageType.MessageType))
@@ -204,6 +169,42 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 					continue
 				}
 			}
+
+			// Handle triggering of new runners
+			var requestIds []int64
+			if len(runnerRequests.Trigger) > 0 {
+				for _, trigger := range runnerRequests.Trigger {
+					requestIds = append(requestIds, trigger.RunnerRequestId)
+				}
+				jobs, err := asc.Client.AcquireJobs(asc.ctx, runnerScaleSetId, session.MessageQueueAccessToken, requestIds)
+				if err == nil {
+					asc.logger.Info("Jobs acquired succesfully, acquiring runners", slog.Any("requestIDs", jobs))
+					err = handler.TriggerNewRunners(runnerRequests.Trigger)
+					if err == nil {
+						lastMessageId = message.MessageId
+						asc.logger.Info("Triggered runners, removing message...", slog.Any("requestIDs", requestIds))
+						asc.Client.DeleteMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, lastMessageId)
+					} else {
+						asc.logger.Error(err.Error())
+					}
+
+				} else {
+					slog.Error("Triggering new runners faileded", slog.Any("err", err))
+				}
+			} else if len(runnerRequests.Cleanup) > 0 {
+				err = handler.CleanRunners(runnerRequests.Cleanup)
+
+				if err == nil {
+					lastMessageId = message.MessageId
+					asc.logger.Info("Cleanup done, removing message...", slog.Any("requestIds", runnerRequests.Cleanup))
+
+					asc.Client.DeleteMessage(asc.ctx, session.MessageQueueUrl, session.MessageQueueAccessToken, lastMessageId)
+
+				} else {
+					slog.Error("Clening up runners failed", slog.Any("err", err))
+				}
+			}
+
 		}
 	}
 }
