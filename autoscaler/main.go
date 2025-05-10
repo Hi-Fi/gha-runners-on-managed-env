@@ -28,6 +28,11 @@ func main() {
 		log.Fatal(err.Error())
 	}
 
+	githubConfigUrl, err := requireEnv("GITHUB_CONFIG_URL")
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -54,8 +59,8 @@ func main() {
 		return
 	}
 
-	scaleSetName := getenv("SCALE_SET_NAME", "local-runner-scale-set")
-	client := github.CreateActionsServiceClient(ctx, pat, logger)
+	scaleSetName := getenv("SCALE_SET_NAME", "serverless-scale-set")
+	client := github.CreateActionsServiceClient(ctx, pat, githubConfigUrl, logger)
 	defer client.Client.CloseIdleConnections()
 	scaleSet, _ := client.Client.GetRunnerScaleSet(ctx, 1, scaleSetName)
 	if scaleSet != nil {

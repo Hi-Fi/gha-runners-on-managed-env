@@ -20,12 +20,12 @@ type ActionsServiceClient struct {
 	logger *slog.Logger
 }
 
-func CreateActionsServiceClient(ctx context.Context, pat string, logger *slog.Logger) *ActionsServiceClient {
+func CreateActionsServiceClient(ctx context.Context, pat string, githubConfigUrl string, logger *slog.Logger) *ActionsServiceClient {
 	creds := actions.ActionsAuth{
 		Token: pat,
 	}
 
-	actionsServiceClient, err := actions.NewClient("https://github.com/Hi-Fi/gha-runners-on-managed-env", &creds)
+	actionsServiceClient, err := actions.NewClient(githubConfigUrl, &creds)
 	if err != nil {
 		log.Fatal(err.Error())
 	}
