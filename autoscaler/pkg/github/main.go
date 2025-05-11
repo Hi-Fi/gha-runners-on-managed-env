@@ -7,6 +7,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -82,6 +83,8 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 
 	var loopStartTime int64 = 0
 
+	var startedRequestIds []int64
+
 	for {
 		loopStartTime = time.Now().Unix()
 		select {
@@ -98,6 +101,7 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 				}
 				continue
 			}
+
 			if message.MessageType != "RunnerScaleSetJobMessages" {
 				asc.logger.Debug(fmt.Sprintf("Skipping message of type %s\n", message.MessageType))
 				lastMessageId = message.MessageId
@@ -123,6 +127,8 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 					continue
 				}
 
+				asc.logger.Debug(fmt.Sprintf("Got message with type %s", messageType.MessageType))
+
 				// We are interested only on JobAvailable messages
 				if messageType.MessageType == "JobAvailable" {
 					var jobAvailable actions.JobAvailable
@@ -132,6 +138,19 @@ func (asc *ActionsServiceClient) StartMessagePolling(runnerScaleSetId int, handl
 						continue
 					}
 					requestIds = append(requestIds, jobAvailable.RunnerRequestId)
+					startedRequestIds = append(startedRequestIds, jobAvailable.RunnerRequestId)
+				} else if messageType.MessageType == "JobAssigned" {
+					// Some reason service doesn't send every time job available message
+					// See https://github.com/actions/actions-runner-controller/issues/3363
+					var jobAssigned actions.JobAssigned
+					if err := json.Unmarshal(rawMessage, &jobAssigned); err != nil {
+						asc.logger.Warn("Failed to unmarshal message to job assigned", slog.Any("err", err))
+						lastMessageId = message.MessageId
+						continue
+					}
+					if !slices.Contains(startedRequestIds, jobAssigned.RunnerRequestId) {
+						requestIds = append(requestIds, jobAssigned.RunnerRequestId)
+					}
 				} else {
 					asc.logger.Debug(fmt.Sprintf("Not parsing message %s", messageType.MessageType))
 					lastMessageId = message.MessageId
