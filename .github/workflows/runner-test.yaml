@@ -10,13 +10,14 @@ on:
           - ecs-runner-set
           - aca-runner-set
           - cr-runner-set
+          - arc-runner-set
 
 # GITHUB_TOKEN doesn't need any permissions on this test workflow
 permissions: {}
 
 jobs:
   hello_world_job:
-    runs-on: ${{ github.event.inputs.runner || 'local-arc' }}
+    runs-on: ${{ github.event.inputs.runner || 'arc-runner-set' }}
     name: A job to say hello
     steps:
       - name: Print greetings for selected runner
